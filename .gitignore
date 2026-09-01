@@ -44,10 +44,13 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+coverage.lcov
 *.cover
 *.py,cover
 .hypothesis/
 .pytest_cache/
+# pytest-cov term output artefacts
+*.coveragerc
 
 # Translations
 *.mo
@@ -95,7 +98,7 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
-# Environments
+# Environments (venv / virtualenv)
 .env
 .venv
 env/
@@ -103,6 +106,13 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Conda environments
+conda-env/
+.conda/
+envs/
+*.conda
+conda-meta/
 
 # Spyder project settings
 .spyderproject
