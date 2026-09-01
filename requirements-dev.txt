@@ -1,0 +1,5 @@
+# Development dependencies (includes all core + dev tools)
+-r requirements.txt
+
+# Additional development tools
+ipython>=8.0.0
