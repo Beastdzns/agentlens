@@ -55,10 +55,10 @@ Repository = "https://github.com/yourusername/agentlens"
 Issues = "https://github.com/yourusername/agentlens/issues"
 
 [tool.setuptools]
-packages = ["agentlens", "agentlens.storage"]
+package-dir = {"" = "src"}
 
-[tool.setuptools.package-dir]
-"" = "src"
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -67,7 +67,6 @@ python_classes = "Test*"
 python_functions = "test_*"
 asyncio_mode = "auto"
 addopts = "-v --tb=short --strict-markers"
-asyncio_mode = "auto"
 markers = [
     "unit: unit tests",
     "integration: integration tests",
