@@ -10,160 +10,215 @@ Key responsibilities:
 - Manage trace context (trace_id, parent_id relationships)
 - Handle context propagation across async/concurrent operations
 - Persist events to storage
-
-PHASE 1 PLACEHOLDER:
-This module currently contains only basic interface stubs.
-Full collector implementation will be added in Phase 1.
-
-Future responsibilities:
-- EventCollector: Main SDK class for instrumenting agents
-- Context manager for associating events with traces
-- Async event handling and batch processing
-- Storage adapter interface
 """
 
-from typing import Any, Optional, Callable
-from contextlib import asynccontextmanager
-from uuid import UUID
+from typing import Any, Optional
+
+from agentlens.events import (
+    AgentEvent,
+    EventStatus,
+    EventType,
+    ObservationLevel,
+    Trace,
+    create_event,
+    create_trace,
+)
 
 
 class EventCollector:
     """
-    PLACEHOLDER: Main event collection interface.
+    Main event collection interface for capturing agent execution events.
     
-    Agents will use EventCollector to emit structured events.
+    Agents use EventCollector to emit structured events for observability.
+    Supports trace lifecycle management and event recording.
     
-    PHASE 1 will implement:
-    - Initialization with storage backend
-    - Event creation and validation
-    - Trace lifecycle management
-    - Context propagation
-    - Error handling and fail-open semantics
+    Example usage:
     
-    Example usage (future):
-    
-        collector = EventCollector(storage_backend=PostgresEventStore())
+        collector = EventCollector()
+        trace = collector.start_trace(agent_id="agent-1")
         
-        with collector.trace("user-request-1") as trace:
-            # Agent operations emit events
-            result = llm.call("prompt")
-            
-            event = collector.record_event(
-                event_type="llm_call",
-                input={"prompt": "..."},
-                output={"response": "..."},
-                latency=1.234,
-            )
+        collector.record_llm_call(
+            agent_id="agent-1",
+            prompt="What is X?",
+            response="X is...",
+            latency_ms=1234.5
+        )
+        
+        final_trace = collector.end_trace(EventStatus.SUCCESS)
     """
     
-    def __init__(self, storage_backend: Optional[Any] = None) -> None:
-        """
-        Initialize the event collector.
-        
-        Args:
-            storage_backend: Storage implementation (None = in-memory for now)
-        """
-        self.storage_backend = storage_backend
+    def __init__(self) -> None:
+        """Initialize the event collector."""
+        self.current_trace: Optional[Trace] = None
     
-    async def record_event(
-        self,
-        event_type: str,
-        input_data: Any,
-        output_data: Any,
-        latency: Optional[float] = None,
-        metadata: Optional[dict] = None,
-    ) -> dict:
+    def start_trace(self, agent_id: str, metadata: Optional[dict] = None) -> Trace:
         """
-        Record a single agent event.
-        
-        PHASE 1 will implement full validation and persistence.
+        Start a new trace for agent execution.
         
         Args:
-            event_type: Type of agent operation
-            input_data: Input to the operation
-            output_data: Result of the operation
-            latency: Duration in seconds
-            metadata: Additional context
+            agent_id: Identifier for the agent.
+            metadata: Optional trace-level metadata.
             
         Returns:
-            Recorded event with assigned IDs
+            New Trace instance.
         """
-        raise NotImplementedError("Phase 1 implementation required")
+        self.current_trace = create_trace(agent_id=agent_id, metadata=metadata)
+        return self.current_trace
     
-    @asynccontextmanager
-    async def trace(self, trace_id: Optional[str] = None, agent_id: Optional[str] = None):
+    def record_llm_call(
+        self,
+        agent_id: str,
+        prompt: str,
+        response: str,
+        latency_ms: float,
+        model: str = "gemini-2.0-flash",
+        status: EventStatus = EventStatus.SUCCESS,
+    ) -> AgentEvent:
         """
-        Context manager for a complete agent execution trace.
-        
-        PHASE 1 will implement proper trace lifecycle.
+        Record an LLM call event.
         
         Args:
-            trace_id: Optional explicit trace ID (auto-generated if None)
-            agent_id: Identifier for the agent
+            agent_id: Identifier for the agent.
+            prompt: The input prompt.
+            response: The model response.
+            latency_ms: Duration in milliseconds.
+            model: Model identifier.
+            status: Completion status.
             
-        Yields:
-            Trace object for recording events within this context
+        Returns:
+            Recorded AgentEvent.
             
-        Example:
-            async with collector.trace("user-request-1") as trace:
-                # Events emitted here are associated with this trace
-                pass
+        Raises:
+            RuntimeError: If no trace is active.
         """
-        raise NotImplementedError("Phase 1 implementation required")
-
-
-class EventNormalizer:
-    """
-    PLACEHOLDER: Normalize heterogeneous agent events to AgentLens schema.
-    
-    Different agent frameworks (LangChain, LlamaIndex, custom, etc.) emit
-    events in different formats. EventNormalizer adapts them to the canonical
-    AgentLens event schema.
-    
-    PHASE 1 will implement:
-    - Adapter patterns for different frameworks
-    - Schema validation and transformation
-    - Timestamp normalization
-    - Field mapping and defaults
-    
-    Example usage (future):
-    
-        normalizer = EventNormalizer()
-        agentlens_event = normalizer.from_langchain_event(langchain_event)
-        agentlens_event = normalizer.from_llamaindex_event(llamaindex_event)
-    """
-    
-    @staticmethod
-    def from_dict(data: dict) -> dict:
-        """
-        Normalize a generic dict event to AgentLens schema.
+        if not self.current_trace:
+            raise RuntimeError("No trace started. Call start_trace() first.")
         
-        PHASE 1 will implement validation and transformation.
+        event = create_event(
+            trace_id=self.current_trace.trace_id,
+            agent_id=agent_id,
+            event_type=EventType.LLM_CALL,
+            status=status,
+            input_data={"prompt": prompt, "model": model},
+            output_data={"response": response},
+            latency_ms=latency_ms,
+            metadata={"model": model},
+        )
+        self.current_trace.add_event(event)
+        return event
+    
+    def record_tool_call(
+        self,
+        agent_id: str,
+        tool_name: str,
+        input_data: dict,
+        output_data: dict,
+        latency_ms: float,
+        status: EventStatus = EventStatus.SUCCESS,
+    ) -> AgentEvent:
         """
-        raise NotImplementedError("Phase 1 implementation required")
-
-
-class ContextManager:
-    """
-    PLACEHOLDER: Manage execution context for proper event association.
+        Record a tool call event.
+        
+        Args:
+            agent_id: Identifier for the agent.
+            tool_name: Name of the tool.
+            input_data: Tool inputs.
+            output_data: Tool outputs.
+            latency_ms: Duration in milliseconds.
+            status: Completion status.
+            
+        Returns:
+            Recorded AgentEvent.
+            
+        Raises:
+            RuntimeError: If no trace is active.
+        """
+        if not self.current_trace:
+            raise RuntimeError("No trace started. Call start_trace() first.")
+        
+        event = create_event(
+            trace_id=self.current_trace.trace_id,
+            agent_id=agent_id,
+            event_type=EventType.TOOL_CALL,
+            status=status,
+            input_data=input_data,
+            output_data=output_data,
+            latency_ms=latency_ms,
+            metadata={"tool": tool_name},
+        )
+        self.current_trace.add_event(event)
+        return event
     
-    When events are emitted from different threads/tasks, this manages
-    the current trace_id and parent_id context so events are properly
-    hierarchical and grouped.
+    def record_event(
+        self,
+        agent_id: str,
+        event_type: EventType,
+        status: EventStatus,
+        input_data: Optional[dict] = None,
+        output_data: Optional[dict] = None,
+        latency_ms: Optional[float] = None,
+        metadata: Optional[dict] = None,
+    ) -> AgentEvent:
+        """
+        Record a generic agent event.
+        
+        Args:
+            agent_id: Identifier for the agent.
+            event_type: Type of agent operation.
+            status: Completion status.
+            input_data: Input to the operation.
+            output_data: Result of the operation.
+            latency_ms: Duration in milliseconds.
+            metadata: Additional context.
+            
+        Returns:
+            Recorded AgentEvent.
+            
+        Raises:
+            RuntimeError: If no trace is active.
+        """
+        if not self.current_trace:
+            raise RuntimeError("No trace started. Call start_trace() first.")
+        
+        event = create_event(
+            trace_id=self.current_trace.trace_id,
+            agent_id=agent_id,
+            event_type=event_type,
+            status=status,
+            input_data=input_data,
+            output_data=output_data,
+            latency_ms=latency_ms,
+            metadata=metadata,
+        )
+        self.current_trace.add_event(event)
+        return event
     
-    PHASE 1 will implement:
-    - Thread-local context storage
-    - Async context variables
-    - Automatic parent-child relationship tracking
-    - Context propagation across boundaries
+    def end_trace(self, status: EventStatus = EventStatus.SUCCESS) -> Trace:
+        """
+        Finalize the current trace.
+        
+        Args:
+            status: Final status for the trace.
+            
+        Returns:
+            Finalized Trace.
+            
+        Raises:
+            RuntimeError: If no trace is active.
+        """
+        if not self.current_trace:
+            raise RuntimeError("No trace to finalize.")
+        
+        self.current_trace.finalize(status)
+        trace = self.current_trace
+        self.current_trace = None
+        return trace
     
-    Example usage (future):
-    
-        ctx = ContextManager()
-        ctx.set_trace_id(trace_uuid)
-        ctx.push_event(event_id)  # Make this the parent for next event
-        ...
-        ctx.pop_event()  # Back to previous context
-    """
-    
-    pass
+    def get_current_trace(self) -> Optional[Trace]:
+        """
+        Get the currently active trace.
+        
+        Returns:
+            Current Trace or None if no trace is active.
+        """
+        return self.current_trace
