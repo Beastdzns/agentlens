@@ -357,3 +357,115 @@ needs to implement `async save(event: AgentEvent) -> None`.
 - **Importance scoring** â€” integrate with the `ObservationLevel` adaptive engine.
 - **Causal graph builder** â€” Phase 3: build Neo4j graph from parent/child event links.
 
+
+
+---
+
+## Frontend — AgentLens Observability Dashboard
+
+A zero-build-step single-page application that lets you run agent queries
+and inspect the resulting telemetry (stat cards, event timeline, JSON
+input/output blocks) directly in a browser.
+
+### Files
+
+```
+frontend/
++-- index.html   # App shell & layout
++-- style.css    # Full design system (dark mode, tokens, components)
++-- app.js       # All logic — API client, mock mode, render engine
+```
+
+### Launching locally (quickest way)
+
+**Option A – Python one-liner (no extra install needed)**
+
+```bash
+# from the repo root:
+python -m http.server 5500 --directory frontend
+# then open http://localhost:5500
+```
+
+**Option B – Node `serve` package**
+
+```bash
+npx serve frontend -p 5500
+# then open http://localhost:5500
+```
+
+**Option C – VS Code Live Server extension**
+Right-click `frontend/index.html` ? *Open with Live Server*.
+
+### Connecting to the FastAPI backend
+
+The `API_BASE_URL` constant at the top of `app.js` controls the backend target:
+
+```js
+const API_BASE_URL = 'http://localhost:8000';   // ? change if needed
+```
+
+The frontend expects Vyankatesh's `web_api.py` to expose:
+
+| Method | Path      | Description                         |
+|--------|-----------|-------------------------------------|
+| POST   | /api/run  | Run an agent query, return a trace  |
+
+**Request body:**
+```json
+{ "query": "How can AI agents be debugged?" }
+```
+
+**Response body (fields the UI reads):**
+```json
+{
+  "trace_id":        "uuid-string",
+  "response":        "Agent's final answer",
+  "status":          "success | failure | partial",
+  "total_latency_ms": 342.7,
+  "events": [
+    {
+      "event_id":    "uuid",
+      "parent_id":   "uuid or null",
+      "agent_id":    "string",
+      "event_type":  "llm_call | tool_call | retrieval | ...",
+      "status":      "success | failure | pending | partial",
+      "latency_ms":  45.2,
+      "input_data":  {},
+      "output_data": {},
+      "metadata":    {},
+      "timestamp":   "ISO-8601"
+    }
+  ]
+}
+```
+
+> **Note:** the UI gracefully handles both `latency_ms` and `latency` field
+> names on events, so either serialization from `AgentEvent.to_dict()` works.
+
+### CORS — development setup
+
+Add this to your FastAPI backend startup so the browser can reach it:
+
+```python
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # tighten in production
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+### Mock Mode — test all visual states without a backend
+
+Click the **"Live Mode"** toggle in the top-right header to switch to
+**Mock Mode**. Four pre-built scenarios appear in the left sidebar:
+
+| Scenario          | What it demonstrates                         |
+|-------------------|----------------------------------------------|
+| Clean Success Run | All-green event timeline, full response       |
+| Partial Failure   | Mixed green/amber badges, retry event         |
+| Full Failure      | Red trace status, error events, empty response|
+| Backend Error 500 | HTTP error banner, no results rendered        |
+

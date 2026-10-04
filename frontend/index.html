@@ -1,0 +1,136 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgentLens — Observability Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+          </svg>
+        </div>
+        <div>
+          <span class="brand-name">AgentLens</span>
+          <span class="brand-tagline">Observability Platform</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="mockModeBtn" class="btn btn-ghost">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+          <span id="mockLabel">Live Mode</span>
+        </button>
+        <div id="apiStatus" class="api-status">
+          <span class="status-dot"></span>
+          <span id="apiStatusText">API</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="app-main">
+    <aside class="sidebar">
+      <div class="sidebar-inner">
+        <div class="section-label">Query</div>
+        <div class="query-form">
+          <textarea id="queryInput" class="query-textarea" placeholder="Ask your agent something&#10;&#10;e.g. How can AI agents be debugged?" rows="6"></textarea>
+          <button id="runBtn" class="btn btn-primary btn-run">
+            <svg id="runIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <span id="runLabel">Run Agent</span>
+          </button>
+        </div>
+
+        <div id="mockPanel" class="mock-panel hidden">
+          <div class="section-label" style="margin-top:20px">Mock Scenarios</div>
+          <div class="mock-scenarios">
+            <button class="mock-scenario-btn" data-scenario="success"><span class="scenario-dot dot-success"></span>Clean Success Run</button>
+            <button class="mock-scenario-btn" data-scenario="partial"><span class="scenario-dot dot-partial"></span>Partial Failure</button>
+            <button class="mock-scenario-btn" data-scenario="full_failure"><span class="scenario-dot dot-error"></span>Full Failure</button>
+            <button class="mock-scenario-btn" data-scenario="backend_error"><span class="scenario-dot dot-error"></span>Backend Error (HTTP 500)</button>
+          </div>
+        </div>
+
+        <div id="traceMeta" class="trace-meta hidden">
+          <div class="section-label" style="margin-top:24px">Last Trace</div>
+          <div class="meta-item"><span class="meta-key">ID</span><code id="metaTraceId" class="meta-val"></code></div>
+          <div class="meta-item"><span class="meta-key">Status</span><span id="metaStatus" class="badge"></span></div>
+          <div class="meta-item"><span class="meta-key">Latency</span><span id="metaLatency" class="meta-val"></span></div>
+          <div class="meta-item"><span class="meta-key">Events</span><span id="metaEventCount" class="meta-val"></span></div>
+        </div>
+      </div>
+    </aside>
+
+    <section class="results-pane">
+      <div id="loadingState" class="state-view hidden">
+        <div class="spinner-wrapper"><div class="spinner"></div><div class="spinner-track"></div></div>
+        <p class="loading-text">Agent is executing&#8230;</p>
+        <p class="loading-sub" id="loadingStep">Initializing trace</p>
+      </div>
+
+      <div id="emptyState" class="state-view">
+        <div class="empty-icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+        </div>
+        <h2 class="empty-title">Ready to observe</h2>
+        <p class="empty-desc">Type a query and click <strong>Run Agent</strong> to execute an agent run and inspect its telemetry.</p>
+      </div>
+
+      <div id="errorBanner" class="error-banner hidden">
+        <div class="error-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <div class="error-content">
+          <p class="error-title">Request Failed</p>
+          <p id="errorMessage" class="error-message"></p>
+        </div>
+        <button id="dismissError" class="error-dismiss">x</button>
+      </div>
+
+      <div id="resultsView" class="hidden">
+        <div class="stat-cards">
+          <div class="stat-card"><div class="stat-label">Trace ID</div><code id="statTraceId" class="stat-value stat-mono"></code></div>
+          <div class="stat-card"><div class="stat-label">Total Latency</div><div id="statLatency" class="stat-value"></div></div>
+          <div class="stat-card"><div class="stat-label">Events</div><div id="statEventCount" class="stat-value"></div></div>
+          <div class="stat-card"><div class="stat-label">Status</div><div id="statStatus" class="stat-value"></div></div>
+        </div>
+
+        <div class="result-section">
+          <div class="result-section-header">
+            <h3 class="result-section-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+              Agent Response
+            </h3>
+          </div>
+          <div id="responseText" class="response-text"></div>
+        </div>
+
+        <div class="result-section">
+          <div class="result-section-header">
+            <h3 class="result-section-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              Event Timeline
+            </h3>
+            <div id="eventFilterBar" class="filter-bar">
+              <button class="filter-btn active" data-filter="all">All</button>
+              <button class="filter-btn" data-filter="success">Success</button>
+              <button class="filter-btn" data-filter="failure">Failure</button>
+            </div>
+          </div>
+          <div id="eventList" class="event-list"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
