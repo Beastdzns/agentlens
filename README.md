@@ -8,8 +8,9 @@ A research project investigating how to minimize observability overhead while pr
 
 ### Prerequisites
 
-- Python 3.12 or later
+- Python 3.10 or later
 - pip or uv
+- A Gemini API key for live LLM calls (optional; offline fallbacks are available)
 
 ### Installation
 
@@ -33,9 +34,8 @@ A research project investigating how to minimize observability overhead while pr
    pip install -e ".[dev]"
    ```
 
-   This installs:
-   - Core dependencies: `pydantic`
-   - Development tools: `pytest`, `pytest-asyncio`, `black`, `ruff`, `mypy`
+    This installs the AgentLens SDK, FastAPI server, Gemini client, in-memory
+    storage, and development tools.
 
 ### Running Tests
 
@@ -51,10 +51,53 @@ pytest --cov=src/agentlens --cov-report=html
 
 ### Code Quality
 
-Format code:
+**Option 1 — Single unified server (API + frontend)**
+
+For offline fallback mode:
+
+
+source venv/bin/activate
+black src/ tests/ examples/
+```
+
+For live Gemini execution:
 
 ```bash
-black src/ tests/ examples/
+source venv/bin/activate
+export GEMINI_API_KEY="your-gemini-api-key"
+python run_demo.py
+```
+
+The launcher prints the actual dashboard URL and automatically chooses the
+next available port if the default port is occupied. Open the printed
+`/app/` URL in your browser.
+
+You can also start the API directly:
+
+```bash
+uvicorn agentlens.web_api:app --reload --port 8000
+```
+
+Then open **`http://localhost:8000/app/`**.
+
+**Option 2 — Standalone frontend server**
+
+```bash
+# Terminal 1: Backend
+uvicorn agentlens.web_api:app --reload --port 8000
+
+# Terminal 2: Frontend
+python -m http.server 5500 --directory frontend
+# then open http://localhost:5500
+```
+
+The frontend defaults to `http://localhost:8000` for the API. You can use an
+alternate API URL with a query parameter, for example:
+
+```text
+http://localhost:5500/?api=http://localhost:8001
+```
+
 ```
 
 Lint code:
@@ -72,30 +115,11 @@ mypy src/
 ## Project Structure
 
 ```
-AgentLens/
-├── src/agentlens/          # Core package
-│   ├── __init__.py         # Package initialization
-│   ├── events.py           # Event models & schemas
-│   └── collector.py        # Event collection interface
-├── examples/               # Example code & agents
-│   └── simple_agent.py    # Simple test agent (placeholder)
-├── tests/                  # Test suite
-│   └── __init__.py
-├── docs/
-│   └── architecture.md     # Architecture & design
-├── pyproject.toml          # Project metadata
-├── README.md              # This file
-└── .gitignore
-```
-
-## Architecture Overview
-
-AgentLens captures structured execution events from AI agents, analyzes them for failure diagnosis, and visualizes causal relationships.
-
-```
-AI Agent
-    ↓
-Event Collector (SDK)
+**Option 3 — Direct Uvicorn command**
+├── src/agentlens/
+│   ├── events.py           # Event models and schemas
+│   ├── collector.py        # Synchronous collector compatibility API
+│   ├── sdk_collector/      # Async collector, context, normalizer
     ↓
 Adaptive Observation Engine
     ↓
@@ -108,16 +132,17 @@ Dashboard
 
 See [docs/architecture.md](docs/architecture.md) for detailed design.
 
-## Development Phases
+### CORS — development setup
 
 | Phase | Focus | Status |
 |-------|-------|--------|
-| 1 | Foundation (events, collector, storage) | Current |
-| 2 | Adaptive observability (importance scoring) | Planned |
-| 3 | Causal graphs | Planned |
-| 4 | Failure diagnosis & root cause | Planned |
-| 5 | Web dashboard | Planned |
-| 6 | Research benchmark | Planned |
+| 1-5 | Events, SDK collector, storage, Gemini demos, tests | Complete |
+| 6 | FastAPI API and simple web dashboard | Complete |
+| 7 | Rich trace visualization and failure UX | Planned |
+| 8 | Persistent storage | Planned |
+| 9 | Adaptive observability | Planned |
+| 10 | Causal analysis and root-cause diagnosis | Planned |
+| 11 | Research benchmark and production deployment | Planned |
 
 ## Research Questions
 
@@ -132,18 +157,20 @@ Can adaptive observability reduce telemetry and system overhead while preserving
 
 ## Technology Stack
 
-**Core:**
-- Python 3.12+
+**Backend:**
+- Python 3.10+
+- FastAPI and Uvicorn
 - Pydantic (data validation)
 - asyncio (async execution)
+- `google-genai` (Gemini API)
 
-**Storage (future):**
-- PostgreSQL (structured events)
-- Neo4j (causal graphs)
+**Frontend:**
+- Vanilla HTML, CSS, and JavaScript
+- No frontend build step required
 
-**Frontend (future):**
-- FastAPI
-- React + TypeScript
+**Storage:**
+- Async in-memory event and trace stores
+- PostgreSQL or another persistent backend planned
 
 **Testing:**
 - pytest
@@ -195,14 +222,12 @@ If you use AgentLens in your research, please cite:
 
 ---
 
-**Status:** Phase 1 - Repository Skeleton → SDK Collector Added
-**Last Updated:** 2026-09-01
+**Status:** Phase 6 - Web API and Dashboard Integrated
+**Last Updated:** 2026-10-08
 
 ---
 
 ## SDK Collector Module (`sdk_collector/`)
-
-> Added in Phase 1 by: [your name here]
 
 The `sdk_collector` package (`src/agentlens/sdk_collector/`) provides the
 high-level SDK interface for capturing and normalizing agent events.  It is
@@ -305,14 +330,12 @@ pytest --cov=src/agentlens --cov-report=term-missing
 pytest --cov=src/agentlens --cov-report=html   # open htmlcov/index.html
 ```
 
-### Conda Environment Setup
+### Environment Setup
 
 ```bash
-# Create a Python 3.12 environment
-conda create -n agentlens-env python=3.12 -y
-
-# Activate (Windows PowerShell / CMD)
-conda activate agentlens-env
+# Create and activate a virtual environment
+python3 -m venv venv
+source venv/bin/activate
 
 # Install the project in editable mode (includes all dev dependencies)
 pip install -e ".[dev]"
@@ -320,37 +343,15 @@ pip install -e ".[dev]"
 
 ---
 
-## What to Change / Next Steps
+## Current Limitations and Next Steps
 
-### 🔧 Vyankatesh — Storage Backend Interface (Required)
+- The current stores are in memory and reset when the server restarts.
+- LangChain and LlamaIndex normalizer adapters remain stubs.
+- Adaptive importance scoring and observation policies are planned.
+- Causal graph generation and automatic root-cause analysis are planned.
+- The dashboard currently uses vanilla JavaScript to keep the demo build-free.
 
-The `EventCollector` accepts an optional `storage_backend` that is injected at
-construction time.  **This interface is not yet defined.**  Vyankatesh needs to:
-
-1. **Define the protocol** — create a class (or `typing.Protocol`) that exposes:
-   ```python
-   class StorageBackend(Protocol):
-       async def save(self, event: AgentEvent) -> None: ...
-   ```
-
-2. **Implement concrete backends**, for example:
-   - `InMemoryBackend` (for testing / local dev)
-   - `PostgresBackend` (Phase 2 — structured event storage)
-   - `Neo4jBackend` (Phase 3 — causal graph storage)
-
-3. **Inject the backend**:
-   ```python
-   from my_storage import PostgresBackend
-
-   backend = PostgresBackend(dsn="postgresql://...")
-   collector = EventCollector(storage_backend=backend)
-   ```
-
-The `EventCollector` already calls `await storage_backend.save(event)` in a
-**fail-open** try/except block, so any `StorageBackend` implementation simply
-needs to implement `async save(event: AgentEvent) -> None`.
-
-### Other Planned Work
+### Planned Work
 
 - **LangChain adapter** — `EventNormalizer.from_langchain_event()` is a stub.
 - **LlamaIndex adapter** — `EventNormalizer.from_llamaindex_event()` is a stub.
@@ -378,19 +379,28 @@ frontend/
 
 ### Launching locally (quickest way)
 
-**Option 1 — Single unified server (API + Frontend on port 8000)**
+**Option 1 — Single unified server (API + frontend)**
 
-Run either:
+For offline fallback mode:
+
 ```bash
-# Using the helper demo script:
+source venv/bin/activate
 python run_demo.py
-
-# Or directly with uvicorn:
-uvicorn agentlens.web_api:app --reload --port 8000
 ```
-Then open **`http://localhost:8000/app/`** in your browser.
 
-**Option 2 — Standalone Python HTTP server (Port 5500 with CORS)**
+For live Gemini execution:
+
+```bash
+source venv/bin/activate
+export GEMINI_API_KEY="your-gemini-api-key"
+python run_demo.py
+```
+
+The launcher prints the actual dashboard URL and automatically chooses the
+next available port if the default port is occupied. Open the printed `/app/`
+URL in your browser.
+
+**Option 2 — Standalone frontend server**
 
 ```bash
 # Terminal 1: Backend
@@ -401,27 +411,20 @@ python -m http.server 5500 --directory frontend
 # then open http://localhost:5500
 ```
 
-**Option 3 — Node `serve` package**
-
-```bash
-npx serve frontend -p 5500
-# then open http://localhost:5500
-```
-
-**Option 4 — VS Code Live Server extension**
-Right-click `frontend/index.html` -> *Open with Live Server*.
-
 ### Connecting to the FastAPI backend
 
 The `API_BASE_URL` constant at the top of `app.js` automatically adapts:
 - If hosted via the unified backend on port 8000, it uses `http://localhost:8000`.
 - If served from a separate server (e.g. port 5500), it targets `http://localhost:8000` via CORS.
 
-The frontend expects Vyankatesh's `web_api.py` to expose:
+The frontend is served by `agentlens.web_api` and expects these endpoints:
 
 | Method | Path      | Description                         |
 |--------|-----------|-------------------------------------|
-| POST   | /api/run  | Run an agent query, return a trace  |
+| GET    | /health   | Check server health                |
+| GET    | /         | Service information                |
+| POST   | /api/run  | Run an agent query, return a trace |
+| GET    | /api/traces/{trace_id} | Retrieve a stored trace |
 
 **Request body:**
 ```json
@@ -457,18 +460,9 @@ The frontend expects Vyankatesh's `web_api.py` to expose:
 
 ### CORS — development setup
 
-Add this to your FastAPI backend startup so the browser can reach it:
-
-```python
-from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],   # tighten in production
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-```
+The API already enables CORS. Set `CORS_ORIGINS` to a comma-separated list of
+allowed origins when running the frontend separately. The default is `*` for
+local development.
 
 ### Mock Mode — test all visual states without a backend
 
