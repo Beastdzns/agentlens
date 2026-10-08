@@ -25,17 +25,18 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from pathlib import Path
 from typing import Any, Optional
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from agentlens.events import EventStatus, EventType, Trace
-from agentlens.sdk_collector import ContextManager, EventCollector, EventNormalizer
+from agentlens.sdk_collector import ContextManager, EventCollector
 from agentlens.storage import InMemoryEventStore, InMemoryTraceStore
-
 
 # ---------------------------------------------------------------------------
 # Application setup
@@ -56,6 +57,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Static frontend assets (if frontend directory exists)
+_frontend_dir = Path(__file__).resolve().parent.parent.parent / "frontend"
+if _frontend_dir.exists():
+    app.mount("/app", StaticFiles(directory=str(_frontend_dir), html=True), name="frontend")
 
 # ---------------------------------------------------------------------------
 # Shared in-memory stores (module-level singletons for the lifetime of the
@@ -95,6 +101,9 @@ class SerializedEvent(BaseModel):
     output_data: Optional[dict[str, Any]] = None
     latency_ms: Optional[float] = None
     parent_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    timestamp: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
 
 
 class RunResponse(BaseModel):
@@ -156,9 +165,10 @@ class _AgentRunner:
                 return fallback
             try:
                 resp = await asyncio.to_thread(
-                    gemini_model.generate_content, prompt,
+                    gemini_model.generate_content,
+                    prompt,
                 )
-                return resp.text
+                return str(resp.text)
             except Exception:
                 raise  # let caller handle Gemini failures
 
@@ -221,9 +231,7 @@ class _AgentRunner:
             await collector.record_event(
                 event_type=EventType.MEMORY_WRITE,
                 input_data={"key": "retrieved_evidence"},
-                output_data={
-                    "document_count": len(retrieval_event.output_data or {})
-                },
+                output_data={"document_count": len(retrieval_event.output_data or {})},
                 latency_ms=2.0,
                 metadata={"step": "memory-write"},
             )
@@ -286,18 +294,27 @@ class _AgentRunner:
 
 def _serialize_event(event: Any) -> SerializedEvent:
     """Convert an AgentEvent to the wire-format dict."""
+    ts = None
+    if hasattr(event, "timestamp") and event.timestamp is not None:
+        ts = (
+            event.timestamp.isoformat()
+            if hasattr(event.timestamp, "isoformat")
+            else str(event.timestamp)
+        )
+
     return SerializedEvent(
         event_id=str(event.event_id),
-        event_type=event.event_type.value
-        if hasattr(event.event_type, "value")
-        else str(event.event_type),
-        status=event.status.value
-        if hasattr(event.status, "value")
-        else str(event.status),
+        event_type=(
+            event.event_type.value if hasattr(event.event_type, "value") else str(event.event_type)
+        ),
+        status=event.status.value if hasattr(event.status, "value") else str(event.status),
         input_data=event.input_data,
         output_data=event.output_data,
         latency_ms=event.latency_ms,
         parent_id=str(event.parent_id) if event.parent_id else None,
+        agent_id=getattr(event, "agent_id", None),
+        timestamp=ts,
+        metadata=getattr(event, "metadata", None),
     )
 
 
@@ -309,7 +326,7 @@ def _extract_answer(trace: Trace) -> str:
             and event.output_data
             and "answer" in event.output_data
         ):
-            return event.output_data["answer"]
+            return str(event.output_data["answer"])
     # Fallback: look for the last LLM_CALL response.
     for event in reversed(trace.events):
         if (
@@ -317,13 +334,30 @@ def _extract_answer(trace: Trace) -> str:
             and event.output_data
             and "response" in event.output_data
         ):
-            return event.output_data["response"]
+            return str(event.output_data["response"])
     return ""
 
 
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+@app.get("/health")
+async def health_check() -> dict[str, str]:
+    """Health check endpoint polled by the frontend dashboard."""
+    return {"status": "ok", "app": "AgentLens API", "version": "0.1.0"}
+
+
+@app.get("/")
+async def root() -> dict[str, str]:
+    """Root info endpoint providing service status and navigation links."""
+    return {
+        "app": "AgentLens API",
+        "status": "online",
+        "docs": "/docs",
+        "dashboard": "/app/",
+    }
 
 
 @app.post("/api/run", response_model=RunResponse)
@@ -361,19 +395,23 @@ async def get_trace(trace_id: str) -> TraceResponse:
 
     try:
         trace = await trace_store.get_trace(tid)
-    except KeyError:
+    except KeyError as exc:
         raise HTTPException(
             status_code=404,
             detail=f"Trace {trace_id} not found",
-        )
+        ) from exc
 
     return TraceResponse(
         trace_id=str(trace.trace_id),
         agent_id=trace.agent_id,
-        status=trace.status.value
-        if hasattr(trace.status, "value")
-        else str(trace.status),
+        status=trace.status.value if hasattr(trace.status, "value") else str(trace.status),
         event_count=trace.event_count,
         total_latency_ms=trace.total_latency_ms,
         events=[_serialize_event(e) for e in trace.events],
     )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("agentlens.web_api:app", host="0.0.0.0", port=8000, reload=True)

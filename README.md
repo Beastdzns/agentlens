@@ -361,7 +361,7 @@ needs to implement `async save(event: AgentEvent) -> None`.
 
 ---
 
-## Frontend — AgentLens Observability Dashboard
+## Frontend â€” AgentLens Observability Dashboard
 
 A zero-build-step single-page application that lets you run agent queries
 and inspect the resulting telemetry (stat cards, event timeline, JSON
@@ -373,36 +373,49 @@ input/output blocks) directly in a browser.
 frontend/
 +-- index.html   # App shell & layout
 +-- style.css    # Full design system (dark mode, tokens, components)
-+-- app.js       # All logic — API client, mock mode, render engine
++-- app.js       # All logic â€” API client, mock mode, render engine
 ```
 
 ### Launching locally (quickest way)
 
-**Option A – Python one-liner (no extra install needed)**
+**Option 1 â€” Single unified server (API + Frontend on port 8000)**
+
+Run either:
+```bash
+# Using the helper demo script:
+python run_demo.py
+
+# Or directly with uvicorn:
+uvicorn agentlens.web_api:app --reload --port 8000
+```
+Then open **`http://localhost:8000/app/`** in your browser.
+
+**Option 2 â€” Standalone Python HTTP server (Port 5500 with CORS)**
 
 ```bash
-# from the repo root:
+# Terminal 1: Backend
+uvicorn agentlens.web_api:app --reload --port 8000
+
+# Terminal 2: Frontend
 python -m http.server 5500 --directory frontend
 # then open http://localhost:5500
 ```
 
-**Option B – Node `serve` package**
+**Option 3 â€” Node `serve` package**
 
 ```bash
 npx serve frontend -p 5500
 # then open http://localhost:5500
 ```
 
-**Option C – VS Code Live Server extension**
-Right-click `frontend/index.html` ? *Open with Live Server*.
+**Option 4 â€” VS Code Live Server extension**
+Right-click `frontend/index.html` -> *Open with Live Server*.
 
 ### Connecting to the FastAPI backend
 
-The `API_BASE_URL` constant at the top of `app.js` controls the backend target:
-
-```js
-const API_BASE_URL = 'http://localhost:8000';   // ? change if needed
-```
+The `API_BASE_URL` constant at the top of `app.js` automatically adapts:
+- If hosted via the unified backend on port 8000, it uses `http://localhost:8000`.
+- If served from a separate server (e.g. port 5500), it targets `http://localhost:8000` via CORS.
 
 The frontend expects Vyankatesh's `web_api.py` to expose:
 
@@ -442,7 +455,7 @@ The frontend expects Vyankatesh's `web_api.py` to expose:
 > **Note:** the UI gracefully handles both `latency_ms` and `latency` field
 > names on events, so either serialization from `AgentEvent.to_dict()` works.
 
-### CORS — development setup
+### CORS â€” development setup
 
 Add this to your FastAPI backend startup so the browser can reach it:
 
@@ -457,7 +470,7 @@ app.add_middleware(
 )
 ```
 
-### Mock Mode — test all visual states without a backend
+### Mock Mode â€” test all visual states without a backend
 
 Click the **"Live Mode"** toggle in the top-right header to switch to
 **Mock Mode**. Four pre-built scenarios appear in the left sidebar:

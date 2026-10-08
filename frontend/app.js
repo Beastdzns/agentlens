@@ -1,10 +1,11 @@
-﻿/**
+/**
  * AgentLens – app.js
  * Pure Vanilla JS. No build step required.
  *
- * To point at a different backend, change the constant below:
  */
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = (typeof window !== 'undefined' && (window.location.port === '8000' || window.location.pathname.startsWith('/app')))
+  ? window.location.origin
+  : 'http://localhost:8000';
 
 // ── State ────────────────────────────────────────────────────
 let isLoading  = false;

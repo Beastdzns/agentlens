@@ -11,14 +11,13 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
 from agentlens.web_api import app, event_store, trace_store
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -114,10 +113,13 @@ class TestRunEndpoint:
         fake_model.generate_content.side_effect = RuntimeError("Gemini quota exceeded")
 
         with patch.dict("os.environ", {"GEMINI_API_KEY": "fake-key"}):
-            with patch("agentlens.web_api.os.getenv", side_effect=lambda k, *a: {
-                "GEMINI_API_KEY": "fake-key",
-                "CORS_ORIGINS": "*",
-            }.get(k, a[0] if a else None)):
+            with patch(
+                "agentlens.web_api.os.getenv",
+                side_effect=lambda k, *a: {
+                    "GEMINI_API_KEY": "fake-key",
+                    "CORS_ORIGINS": "*",
+                }.get(k, a[0] if a else None),
+            ):
                 with patch(
                     "google.generativeai.GenerativeModel",
                     return_value=fake_model,
@@ -130,6 +132,81 @@ class TestRunEndpoint:
 
         assert response.status_code == 502
         assert "Agent execution failed" in response.json()["detail"]
+
+    def test_successful_run_serializes_extended_fields(self, client: TestClient):
+        """Events must serialize agent_id, timestamp, and metadata."""
+        response = client.post(
+            "/api/run",
+            json={"query": "Test metadata serialization"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        for event in data["events"]:
+            assert "agent_id" in event
+            assert event["agent_id"] == "multistep-research-agent"
+            assert "timestamp" in event
+            assert event["timestamp"] is not None
+            assert "metadata" in event
+            assert isinstance(event["metadata"], dict)
+
+        # Confirm step-specific metadata is preserved
+        planning_event = next(e for e in data["events"] if e["event_type"] == "decision")
+        assert planning_event["metadata"].get("step") == "planning"
+
+    def test_successful_run_with_gemini_mocked(self, client: TestClient):
+        """When Gemini is configured and succeeds, its output is used."""
+        fake_model = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.text = "Mocked Gemini plan and synthesis output."
+        fake_model.generate_content.return_value = mock_resp
+
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "fake-valid-key"}):
+            with patch(
+                "agentlens.web_api.os.getenv",
+                side_effect=lambda k, *a: {
+                    "GEMINI_API_KEY": "fake-valid-key",
+                    "CORS_ORIGINS": "*",
+                }.get(k, a[0] if a else None),
+            ):
+                with patch("google.generativeai.GenerativeModel", return_value=fake_model):
+                    with patch("google.generativeai.configure"):
+                        response = client.post(
+                            "/api/run",
+                            json={"query": "Explain quantum computing"},
+                        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert "Mocked Gemini plan and synthesis output." in data["response"]
+
+
+# ---------------------------------------------------------------------------
+# Health & Static endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestHealthAndStaticEndpoints:
+    """Tests for health check, root info, and static frontend dashboard."""
+
+    def test_health_check_returns_ok(self, client: TestClient):
+        response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert "AgentLens" in data["app"]
+
+    def test_root_endpoint_returns_online(self, client: TestClient):
+        response = client.get("/")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "online"
+        assert "/app/" in data["dashboard"]
+
+    def test_frontend_dashboard_accessible(self, client: TestClient):
+        response = client.get("/app/")
+        assert response.status_code == 200
+        assert "<title>AgentLens" in response.text
 
 
 # ---------------------------------------------------------------------------
@@ -173,3 +250,27 @@ class TestTraceEndpoint:
         response = client.get("/api/traces/not-a-uuid")
         assert response.status_code == 400
         assert "Invalid trace_id" in response.json()["detail"]
+
+    def test_complete_query_to_trace_workflow(self, client: TestClient):
+        """End-to-end verification of query -> run -> store -> fetch trace."""
+        query = "Verify end-to-end trace consistency"
+        run_resp = client.post("/api/run", json={"query": query})
+        assert run_resp.status_code == 200
+        run_data = run_resp.json()
+
+        trace_id = run_data["trace_id"]
+        trace_resp = client.get(f"/api/traces/{trace_id}")
+        assert trace_resp.status_code == 200
+        trace_data = trace_resp.json()
+
+        assert trace_data["trace_id"] == trace_id
+        assert trace_data["event_count"] == len(run_data["events"])
+        assert trace_data["total_latency_ms"] == run_data["total_latency_ms"]
+        assert len(trace_data["events"]) == len(run_data["events"])
+
+        # Check parent-child hierarchy in retrieved events
+        events_by_id = {e["event_id"]: e for e in trace_data["events"]}
+        child_events = [e for e in trace_data["events"] if e["parent_id"] is not None]
+        assert len(child_events) > 0
+        for child in child_events:
+            assert child["parent_id"] in events_by_id
