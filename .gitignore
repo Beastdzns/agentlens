@@ -149,3 +149,8 @@ output/
 
 # Internal
 TEAM_PLANS.md
+report.md
+
+# Frontend
+frontend/node_modules/
+frontend/.cache/
