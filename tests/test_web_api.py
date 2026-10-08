@@ -14,8 +14,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import httpx
 import pytest
-from fastapi.testclient import TestClient
 
 from agentlens.web_api import app, event_store, trace_store
 
@@ -37,9 +37,11 @@ def _clear_stores():
 
 
 @pytest.fixture
-def client():
-    """Synchronous test client for FastAPI."""
-    return TestClient(app)
+async def client():
+    """Async ASGI client without Starlette's deprecated sync TestClient path."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as value:
+        yield value
 
 
 # ---------------------------------------------------------------------------
@@ -50,9 +52,9 @@ def client():
 class TestRunEndpoint:
     """Tests for POST /api/run."""
 
-    def test_successful_run(self, client: TestClient):
+    async def test_successful_run(self, client: httpx.AsyncClient):
         """A valid query should return a complete trace with all event fields."""
-        response = client.post(
+        response = await client.post(
             "/api/run",
             json={"query": "How can AI agents be debugged?"},
         )
@@ -77,35 +79,35 @@ class TestRunEndpoint:
             assert "latency_ms" in event
             assert "parent_id" in event  # may be null
 
-    def test_successful_run_stores_trace(self, client: TestClient):
+    async def test_successful_run_stores_trace(self, client: httpx.AsyncClient):
         """After POST /api/run the trace should be retrievable via GET."""
-        run_resp = client.post(
+        run_resp = await client.post(
             "/api/run",
             json={"query": "What is observability?"},
         )
         assert run_resp.status_code == 200
         trace_id = run_resp.json()["trace_id"]
 
-        get_resp = client.get(f"/api/traces/{trace_id}")
+        get_resp = await client.get(f"/api/traces/{trace_id}")
         assert get_resp.status_code == 200
         assert get_resp.json()["trace_id"] == trace_id
 
-    def test_empty_query_returns_422(self, client: TestClient):
+    async def test_empty_query_returns_422(self, client: httpx.AsyncClient):
         """An empty string query should be rejected by Pydantic validation."""
-        response = client.post("/api/run", json={"query": ""})
+        response = await client.post("/api/run", json={"query": ""})
         assert response.status_code == 422
 
-    def test_blank_query_returns_422(self, client: TestClient):
+    async def test_blank_query_returns_422(self, client: httpx.AsyncClient):
         """A whitespace-only query should be rejected."""
-        response = client.post("/api/run", json={"query": "   "})
+        response = await client.post("/api/run", json={"query": "   "})
         assert response.status_code == 422
 
-    def test_missing_query_returns_422(self, client: TestClient):
+    async def test_missing_query_returns_422(self, client: httpx.AsyncClient):
         """Omitting the query field entirely should be rejected."""
-        response = client.post("/api/run", json={})
+        response = await client.post("/api/run", json={})
         assert response.status_code == 422
 
-    def test_gemini_failure_returns_502(self, client: TestClient):
+    async def test_gemini_failure_returns_502(self, client: httpx.AsyncClient):
         """When Gemini raises an exception the API should return 502."""
         # Patch os.getenv so the runner thinks a key is available, then make
         # the Gemini model raise.
@@ -120,22 +122,23 @@ class TestRunEndpoint:
                     "CORS_ORIGINS": "*",
                 }.get(k, a[0] if a else None),
             ):
+                fake_client = MagicMock()
+                fake_client.models.generate_content = fake_model.generate_content
                 with patch(
-                    "google.generativeai.GenerativeModel",
-                    return_value=fake_model,
+                    "google.genai.Client",
+                    return_value=fake_client,
                 ):
-                    with patch("google.generativeai.configure"):
-                        response = client.post(
-                            "/api/run",
-                            json={"query": "trigger gemini failure"},
-                        )
+                    response = await client.post(
+                        "/api/run",
+                        json={"query": "trigger gemini failure"},
+                    )
 
         assert response.status_code == 502
         assert "Agent execution failed" in response.json()["detail"]
 
-    def test_successful_run_serializes_extended_fields(self, client: TestClient):
+    async def test_successful_run_serializes_extended_fields(self, client: httpx.AsyncClient):
         """Events must serialize agent_id, timestamp, and metadata."""
-        response = client.post(
+        response = await client.post(
             "/api/run",
             json={"query": "Test metadata serialization"},
         )
@@ -153,7 +156,7 @@ class TestRunEndpoint:
         planning_event = next(e for e in data["events"] if e["event_type"] == "decision")
         assert planning_event["metadata"].get("step") == "planning"
 
-    def test_successful_run_with_gemini_mocked(self, client: TestClient):
+    async def test_successful_run_with_gemini_mocked(self, client: httpx.AsyncClient):
         """When Gemini is configured and succeeds, its output is used."""
         fake_model = MagicMock()
         mock_resp = MagicMock()
@@ -168,12 +171,13 @@ class TestRunEndpoint:
                     "CORS_ORIGINS": "*",
                 }.get(k, a[0] if a else None),
             ):
-                with patch("google.generativeai.GenerativeModel", return_value=fake_model):
-                    with patch("google.generativeai.configure"):
-                        response = client.post(
-                            "/api/run",
-                            json={"query": "Explain quantum computing"},
-                        )
+                fake_client = MagicMock()
+                fake_client.models.generate_content.return_value = mock_resp
+                with patch("google.genai.Client", return_value=fake_client):
+                    response = await client.post(
+                        "/api/run",
+                        json={"query": "Explain quantum computing"},
+                    )
 
         assert response.status_code == 200
         data = response.json()
@@ -189,22 +193,22 @@ class TestRunEndpoint:
 class TestHealthAndStaticEndpoints:
     """Tests for health check, root info, and static frontend dashboard."""
 
-    def test_health_check_returns_ok(self, client: TestClient):
-        response = client.get("/health")
+    async def test_health_check_returns_ok(self, client: httpx.AsyncClient):
+        response = await client.get("/health")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "ok"
         assert "AgentLens" in data["app"]
 
-    def test_root_endpoint_returns_online(self, client: TestClient):
-        response = client.get("/")
+    async def test_root_endpoint_returns_online(self, client: httpx.AsyncClient):
+        response = await client.get("/")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "online"
         assert "/app/" in data["dashboard"]
 
-    def test_frontend_dashboard_accessible(self, client: TestClient):
-        response = client.get("/app/")
+    async def test_frontend_dashboard_accessible(self, client: httpx.AsyncClient):
+        response = await client.get("/app/")
         assert response.status_code == 200
         assert "<title>AgentLens" in response.text
 
@@ -217,16 +221,16 @@ class TestHealthAndStaticEndpoints:
 class TestTraceEndpoint:
     """Tests for GET /api/traces/{trace_id}."""
 
-    def test_trace_retrieval_after_run(self, client: TestClient):
+    async def test_trace_retrieval_after_run(self, client: httpx.AsyncClient):
         """Running the agent then fetching the trace should succeed."""
-        run_resp = client.post(
+        run_resp = await client.post(
             "/api/run",
             json={"query": "Explain causal tracing."},
         )
         assert run_resp.status_code == 200
         trace_id = run_resp.json()["trace_id"]
 
-        trace_resp = client.get(f"/api/traces/{trace_id}")
+        trace_resp = await client.get(f"/api/traces/{trace_id}")
         assert trace_resp.status_code == 200
 
         data = trace_resp.json()
@@ -238,28 +242,28 @@ class TestTraceEndpoint:
         assert isinstance(data["events"], list)
         assert len(data["events"]) == data["event_count"]
 
-    def test_trace_not_found_returns_404(self, client: TestClient):
+    async def test_trace_not_found_returns_404(self, client: httpx.AsyncClient):
         """Requesting a non-existent trace should return 404."""
         fake_id = str(uuid4())
-        response = client.get(f"/api/traces/{fake_id}")
+        response = await client.get(f"/api/traces/{fake_id}")
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
 
-    def test_invalid_trace_id_returns_400(self, client: TestClient):
+    async def test_invalid_trace_id_returns_400(self, client: httpx.AsyncClient):
         """A malformed UUID should return 400."""
-        response = client.get("/api/traces/not-a-uuid")
+        response = await client.get("/api/traces/not-a-uuid")
         assert response.status_code == 400
         assert "Invalid trace_id" in response.json()["detail"]
 
-    def test_complete_query_to_trace_workflow(self, client: TestClient):
+    async def test_complete_query_to_trace_workflow(self, client: httpx.AsyncClient):
         """End-to-end verification of query -> run -> store -> fetch trace."""
         query = "Verify end-to-end trace consistency"
-        run_resp = client.post("/api/run", json={"query": query})
+        run_resp = await client.post("/api/run", json={"query": query})
         assert run_resp.status_code == 200
         run_data = run_resp.json()
 
         trace_id = run_data["trace_id"]
-        trace_resp = client.get(f"/api/traces/{trace_id}")
+        trace_resp = await client.get(f"/api/traces/{trace_id}")
         assert trace_resp.status_code == 200
         trace_data = trace_resp.json()
 

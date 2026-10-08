@@ -18,7 +18,7 @@ from typing import Any
 from uuid import UUID
 
 from agentlens.events import EventStatus, EventType, Trace
-from agentlens.sdk_collector import ContextManager, EventCollector, EventNormalizer
+from agentlens.sdk_collector import EventCollector, EventNormalizer
 from agentlens.storage import InMemoryEventStore, InMemoryTraceStore
 
 
@@ -27,26 +27,28 @@ class MultiStepResearchAgent:
 
     def __init__(self, event_store: InMemoryEventStore) -> None:
         self.collector = EventCollector(storage_backend=event_store)
-        self.context = ContextManager()
         self.normalizer = EventNormalizer()
-        self._gemini_model: Any = None
+        self._gemini_client: Any = None
 
         api_key = os.getenv("GEMINI_API_KEY")
         if api_key:
             try:
-                import google.generativeai as genai
+                from google import genai
 
-                genai.configure(api_key=api_key)
-                self._gemini_model = genai.GenerativeModel("gemini-2.5-flash")
+                self._gemini_client = genai.Client(api_key=api_key)
             except ImportError:
                 print("Gemini dependency unavailable; using offline responses.")
 
     async def _ask_gemini(self, prompt: str, fallback: str) -> str:
         """Ask Gemini synchronously through a worker thread, with a fallback."""
-        if self._gemini_model is None:
+        if self._gemini_client is None:
             return fallback
         try:
-            response = await asyncio.to_thread(self._gemini_model.generate_content, prompt)
+            response = await asyncio.to_thread(
+                self._gemini_client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
             return response.text
         except Exception as exc:
             print(f"Gemini call unavailable ({exc}); continuing with offline response.")
@@ -72,7 +74,7 @@ class MultiStepResearchAgent:
                 metadata={"step": "planning"},
             )
 
-            self.context.push_parent(planning_event.event_id)
+            self.collector.push_parent(planning_event.event_id)
             print("Step 2/5: Recording a web-search tool call.")
             search_started = time.perf_counter()
             search_event = await self.collector.record_event(
@@ -85,7 +87,7 @@ class MultiStepResearchAgent:
                 metadata={"step": "search", "tool": "web_search"},
             )
 
-            self.context.push_parent(search_event.event_id)
+            self.collector.push_parent(search_event.event_id)
             print("Step 3/5: Recording retrieved evidence under the search call.")
             retrieval_started = time.perf_counter()
             retrieval_event = await self.collector.record_event(
@@ -101,7 +103,7 @@ class MultiStepResearchAgent:
                 latency_ms=(time.perf_counter() - retrieval_started) * 1000,
                 metadata={"step": "retrieval"},
             )
-            self.context.pop_parent()
+            self.collector.pop_parent()
 
             print("Step 4/5: Recording the evidence in agent memory.")
             await self.collector.record_event(
@@ -111,7 +113,7 @@ class MultiStepResearchAgent:
                 latency_ms=2.0,
                 metadata={"step": "memory-write"},
             )
-            self.context.pop_parent()
+            self.collector.pop_parent()
 
             synthesis_started = time.perf_counter()
             synthesis_prompt = (

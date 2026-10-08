@@ -35,7 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from agentlens.events import EventStatus, EventType, Trace
-from agentlens.sdk_collector import ContextManager, EventCollector
+from agentlens.sdk_collector import EventCollector
 from agentlens.storage import InMemoryEventStore, InMemoryTraceStore
 
 # ---------------------------------------------------------------------------
@@ -146,17 +146,15 @@ class _AgentRunner:
     async def run(self, query: str) -> Trace:
         """Execute the full pipeline and return a finalised Trace."""
         collector = EventCollector(storage_backend=self._event_store)
-        context = ContextManager()
 
         # --- Initialise Gemini (if key is available) -----------------------
         gemini_model: Any = None
         api_key = os.getenv("GEMINI_API_KEY")
         if api_key:
             try:
-                import google.generativeai as genai
+                from google import genai
 
-                genai.configure(api_key=api_key)
-                gemini_model = genai.GenerativeModel("gemini-2.5-flash")
+                gemini_model = genai.Client(api_key=api_key)
             except ImportError:
                 pass  # dependency not installed — use fallback
 
@@ -165,8 +163,9 @@ class _AgentRunner:
                 return fallback
             try:
                 resp = await asyncio.to_thread(
-                    gemini_model.generate_content,
-                    prompt,
+                    gemini_model.models.generate_content,
+                    model="gemini-2.5-flash",
+                    contents=prompt,
                 )
                 return str(resp.text)
             except Exception:
@@ -193,7 +192,7 @@ class _AgentRunner:
             )
 
             # Step 2 — Web search (simulated tool call)
-            context.push_parent(planning_event.event_id)
+            collector.push_parent(planning_event.event_id)
             search_started = time.perf_counter()
             search_event = await collector.record_event(
                 event_type=EventType.TOOL_CALL,
@@ -210,7 +209,7 @@ class _AgentRunner:
             )
 
             # Step 3 — Retrieval
-            context.push_parent(search_event.event_id)
+            collector.push_parent(search_event.event_id)
             retrieval_started = time.perf_counter()
             retrieval_event = await collector.record_event(
                 event_type=EventType.RETRIEVAL,
@@ -225,7 +224,7 @@ class _AgentRunner:
                 latency_ms=(time.perf_counter() - retrieval_started) * 1000,
                 metadata={"step": "retrieval"},
             )
-            context.pop_parent()
+            collector.pop_parent()
 
             # Step 4 — Memory write
             await collector.record_event(
@@ -235,7 +234,7 @@ class _AgentRunner:
                 latency_ms=2.0,
                 metadata={"step": "memory-write"},
             )
-            context.pop_parent()
+            collector.pop_parent()
 
             # Step 5 — Synthesis LLM call
             synthesis_started = time.perf_counter()
@@ -267,9 +266,26 @@ class _AgentRunner:
 
             await collector.end_trace()
 
-        except Exception:
-            # End the trace so context is cleaned up, then re-raise.
+        except Exception as exc:
+            await collector.record_event(
+                event_type=EventType.ERROR,
+                status=EventStatus.FAILURE,
+                output_data={"error": str(exc)},
+                metadata={"exception_type": type(exc).__name__},
+            )
             await collector.end_trace()
+
+            failed_events = await self._event_store.get_trace_events(trace_id)
+            failed_trace = Trace(
+                trace_id=trace_id,
+                agent_id="multistep-research-agent",
+                status=EventStatus.FAILURE,
+                events=failed_events,
+                event_count=len(failed_events),
+                total_latency_ms=sum(e.latency_ms or 0.0 for e in failed_events),
+            )
+            failed_trace.finalize(EventStatus.FAILURE)
+            await self._trace_store.save_trace(failed_trace)
             raise
 
         # --- Assemble and persist the Trace object -------------------------

@@ -3,9 +3,14 @@
  * Pure Vanilla JS. No build step required.
  *
  */
-const API_BASE_URL = (typeof window !== 'undefined' && (window.location.port === '8000' || window.location.pathname.startsWith('/app')))
-  ? window.location.origin
-  : 'http://localhost:8000';
+let API_BASE_URL = (function() {
+  if (typeof window === 'undefined') return 'http://localhost:8000';
+  const urlParams = new URLSearchParams(window.location.search);
+  const param = urlParams.get('api');
+  if (param) return param.replace(/\/+$/, '');
+  if (window.location.pathname.startsWith('/app')) return window.location.origin;
+  return 'http://localhost:8000';
+})();
 
 // ── State ────────────────────────────────────────────────────
 let isLoading  = false;

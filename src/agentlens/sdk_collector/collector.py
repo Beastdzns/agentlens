@@ -267,6 +267,14 @@ class EventCollector:
         """
         return self._ctx.get_parent_id()
 
+    def push_parent(self, event_id: UUID) -> None:
+        """Make an event the parent of subsequently recorded events."""
+        self._ctx.push_parent(event_id)
+
+    def pop_parent(self) -> Optional[UUID]:
+        """Remove and return the current parent event, if one exists."""
+        return self._ctx.pop_parent()
+
     # ------------------------------------------------------------------
     # @traced async-context-manager decorator
     # ------------------------------------------------------------------
