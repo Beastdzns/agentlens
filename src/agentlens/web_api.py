@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +38,8 @@ from pydantic import BaseModel, Field, field_validator
 from agentlens.events import EventStatus, EventType, Trace
 from agentlens.sdk_collector import EventCollector
 from agentlens.storage import InMemoryEventStore, InMemoryTraceStore
+
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Application setup
@@ -150,6 +153,7 @@ class _AgentRunner:
         # --- Initialise Gemini (if key is available) -----------------------
         gemini_model: Any = None
         api_key = os.getenv("GEMINI_API_KEY")
+        model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         if api_key:
             try:
                 from google import genai
@@ -164,7 +168,7 @@ class _AgentRunner:
             try:
                 resp = await asyncio.to_thread(
                     gemini_model.models.generate_content,
-                    model="gemini-2.5-flash",
+                    model=model_name,
                     contents=prompt,
                 )
                 return str(resp.text)
@@ -253,7 +257,7 @@ class _AgentRunner:
                 input_data={"prompt": query, "plan": plan},
                 output_data={"response": answer},
                 latency_ms=(time.perf_counter() - synthesis_started) * 1000,
-                metadata={"step": "synthesis", "model": "gemini-2.5-flash"},
+                metadata={"step": "synthesis", "model": model_name},
             )
 
             # Step 6 — Final response

@@ -1,10 +1,15 @@
+import os
 import time
+
+from dotenv import load_dotenv
 from typing import Optional
 
 from google import genai
 
 from agentlens.collector import EventCollector
 from agentlens.events import EventStatus, Trace
+
+load_dotenv()
 
 
 class SimpleAgent:
@@ -19,7 +24,7 @@ class SimpleAgent:
         collector: EventCollector for capturing events.
     """
     
-    def __init__(self, api_key: str, model_name: str = "gemini-2.5-flash") -> None:
+    def __init__(self, api_key: str, model_name: Optional[str] = None) -> None:
         """
         Initialize the agent with Gemini API.
         
@@ -28,7 +33,7 @@ class SimpleAgent:
             model_name: Gemini model to use.
         """
         self.client = genai.Client(api_key=api_key)
-        self.model_name = model_name
+        self.model_name = model_name or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         self.collector = EventCollector()
     
     async def run(

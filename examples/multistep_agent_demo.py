@@ -15,11 +15,15 @@ import asyncio
 import os
 import time
 from typing import Any
+
+from dotenv import load_dotenv
 from uuid import UUID
 
 from agentlens.events import EventStatus, EventType, Trace
 from agentlens.sdk_collector import EventCollector, EventNormalizer
 from agentlens.storage import InMemoryEventStore, InMemoryTraceStore
+
+load_dotenv()
 
 
 class MultiStepResearchAgent:
@@ -29,6 +33,7 @@ class MultiStepResearchAgent:
         self.collector = EventCollector(storage_backend=event_store)
         self.normalizer = EventNormalizer()
         self._gemini_client: Any = None
+        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
         api_key = os.getenv("GEMINI_API_KEY")
         if api_key:
@@ -46,7 +51,7 @@ class MultiStepResearchAgent:
         try:
             response = await asyncio.to_thread(
                 self._gemini_client.models.generate_content,
-                model="gemini-2.5-flash",
+                model=self.model_name,
                 contents=prompt,
             )
             return response.text
@@ -131,7 +136,7 @@ class MultiStepResearchAgent:
                 input_data={"prompt": query, "plan": plan},
                 output_data={"response": answer},
                 latency_ms=(time.perf_counter() - synthesis_started) * 1000,
-                metadata={"step": "synthesis", "model": "gemini-2.5-flash"},
+                metadata={"step": "synthesis", "model": self.model_name},
             )
 
             await self.collector.record_event(

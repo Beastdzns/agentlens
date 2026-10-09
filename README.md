@@ -51,53 +51,10 @@ pytest --cov=src/agentlens --cov-report=html
 
 ### Code Quality
 
-**Option 1 — Single unified server (API + frontend)**
+Format code:
 
-For offline fallback mode:
-
-
-source venv/bin/activate
+```bash
 black src/ tests/ examples/
-```
-
-For live Gemini execution:
-
-```bash
-source venv/bin/activate
-export GEMINI_API_KEY="your-gemini-api-key"
-python run_demo.py
-```
-
-The launcher prints the actual dashboard URL and automatically chooses the
-next available port if the default port is occupied. Open the printed
-`/app/` URL in your browser.
-
-You can also start the API directly:
-
-```bash
-uvicorn agentlens.web_api:app --reload --port 8000
-```
-
-Then open **`http://localhost:8000/app/`**.
-
-**Option 2 — Standalone frontend server**
-
-```bash
-# Terminal 1: Backend
-uvicorn agentlens.web_api:app --reload --port 8000
-
-# Terminal 2: Frontend
-python -m http.server 5500 --directory frontend
-# then open http://localhost:5500
-```
-
-The frontend defaults to `http://localhost:8000` for the API. You can use an
-alternate API URL with a query parameter, for example:
-
-```text
-http://localhost:5500/?api=http://localhost:8001
-```
-
 ```
 
 Lint code:
@@ -113,6 +70,7 @@ mypy src/
 ```
 
 ## Project Structure
+
 
 ```
 **Option 3 — Direct Uvicorn command**
@@ -392,7 +350,8 @@ For live Gemini execution:
 
 ```bash
 source venv/bin/activate
-export GEMINI_API_KEY="your-gemini-api-key"
+cp .env.example .env
+# Edit .env and set GEMINI_API_KEY and GEMINI_MODEL
 python run_demo.py
 ```
 

@@ -13,11 +13,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+
+from dotenv import load_dotenv
 import os
 import socket
 import sys
 import webbrowser
 
+load_dotenv()
 
 def is_port_in_use(host: str, port: int) -> bool:
     """Check if a network port is already in use."""
