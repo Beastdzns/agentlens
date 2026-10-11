@@ -1,0 +1,103 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgentLens – Test Suite</title>
+  <style>
+    :root {
+      --bg: #0d0f14; --surface: #13161e; --elevated: #1a1e2a;
+      --border: rgba(255,255,255,.07);
+      --text: #e8eaf0; --muted: #8890a4;
+      --green: #22c55e; --red: #ef4444; --brand: #818cf8;
+      --font: 'Inter', system-ui, sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: var(--font); font-size: 14px;
+      padding: 32px; max-width: 760px; margin: 0 auto;
+    }
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    h1 span { color: var(--brand); }
+    p.subtitle { color: var(--muted); font-size: 12px; margin-bottom: 28px; }
+
+    #test-summary {
+      font-size: 16px; font-weight: 700; padding: 14px 20px;
+      border-radius: 10px; margin-bottom: 20px;
+    }
+    .summary-pass { background: rgba(34,197,94,.12); color: var(--green); border: 1px solid rgba(34,197,94,.25); }
+    .summary-fail { background: rgba(239,68,68,.12);  color: var(--red);   border: 1px solid rgba(239,68,68,.25); }
+
+    #test-output { display: flex; flex-direction: column; gap: 5px; }
+
+    .test-row {
+      font-family: var(--mono); font-size: 12px;
+      padding: 8px 14px; border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .test-row.pass { background: rgba(34,197,94,.07); color: var(--green); }
+    .test-row.fail { background: rgba(239,68,68,.10); color: var(--red); border-color: rgba(239,68,68,.25); font-weight: 700; }
+
+    .console-note {
+      margin-top: 24px; font-size: 11px; color: var(--muted);
+      font-family: var(--mono);
+    }
+  </style>
+</head>
+<body>
+  <h1>AgentLens <span>Test Suite</span></h1>
+  <p class="subtitle">Vanilla JS – zero build step. Open in any browser to run.</p>
+
+  <div id="test-summary">Running…</div>
+  <div id="test-output"></div>
+  <p class="console-note">Additional failure details are logged to the browser console (F12).</p>
+
+  <!--
+    Load app.js first so all utility functions are available on window.
+    We stub the DOM so app.js doesn't crash looking for elements.
+  -->
+  <script>
+    // Minimal DOM stubs so app.js event-listener setup doesn't throw
+    // (querySelectorAll returns an empty iterable, getElementById returns a mock)
+    const _noop = () => {};
+    const _mockEl = {
+      addEventListener: _noop, classList: { remove: _noop, add: _noop, toggle: _noop },
+      textContent: '', innerHTML: '', disabled: false, value: '',
+      querySelectorAll: () => []
+    };
+    ['queryInput','runBtn','runIcon','runLabel','mockModeBtn','mockLabel',
+     'mockPanel','loadingState','emptyState','errorBanner','errorMessage',
+     'dismissError','resultsView','loadingStep','apiStatus','apiStatusText',
+     'statTraceId','statLatency','statEventCount','statStatus','responseText',
+     'eventList','traceMeta','metaTraceId','metaStatus','metaLatency','metaEventCount'
+    ].forEach(id => {
+      const orig = document.getElementById.bind(document);
+      if (!orig(id)) {
+        const el = document.createElement('div');
+        el.id = id;
+        document.body.appendChild(el);
+      }
+    });
+
+    // Stub querySelectorAll('.filter-btn') and ('.mock-scenario-btn')
+    const _origQSA = document.querySelectorAll.bind(document);
+    document.querySelectorAll = sel => {
+      if (sel === '.filter-btn' || sel === '.mock-scenario-btn') return [];
+      return _origQSA(sel);
+    };
+
+    // Stub fetch so app.js boot (checkApiHealth) doesn't throw
+    window.fetch = () => Promise.reject(new Error('stub'));
+  </script>
+
+  <script src="app.js"></script>
+  <script src="test.js"></script>
+  <script>
+    // Restore querySelectorAll after app.js has loaded
+    document.querySelectorAll = _origQSA;
+    runAllTests();
+  </script>
+</body>
+</html>

@@ -624,3 +624,166 @@ textarea { font-family: inherit; }
   max-height: 240px;
   overflow-y: auto;
 }
+
+/* ================================================================
+   Timeline interface additions  (feature/timeline_intf)
+   ================================================================ */
+
+/* --- Partial filter pill ---------------------------------------- */
+.filter-btn[data-filter="partial"].active {
+  background: var(--amber-bg);
+  color: var(--amber-500);
+  border-color: var(--amber-border);
+}
+
+/* --- Timeline row (wraps connector + card) ---------------------- */
+.tl-row {
+  display: flex;
+  align-items: flex-start;
+  /* indent = depth * 24px, capped to 6 levels */
+  margin-left: calc(var(--depth, 0) * 24px);
+}
+
+/* connector dots that show hierarchy */
+.tl-connectors {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+  padding-top: 14px;
+  margin-right: 6px;
+}
+.tl-connector {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border-accent);
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+/* override: deepen colour per nesting level */
+.tl-row[style*="--depth:1"] .tl-connector { background: rgba(99,102,241,.4); }
+.tl-row[style*="--depth:2"] .tl-connector { background: rgba(99,102,241,.6); }
+.tl-row[style*="--depth:3"] .tl-connector { background: var(--brand-400); }
+
+.tl-card { flex: 1; min-width: 0; }
+
+/* empty message */
+.tl-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 14px 6px;
+}
+
+/* --- Failure card ----------------------------------------------- */
+.event-card.is-failure {
+  background: rgba(239,68,68,.04);
+  border-color: var(--red-border);
+  box-shadow: 0 0 0 1px rgba(239,68,68,.12);
+}
+.event-card.is-failure .event-header {
+  background: rgba(239,68,68,.08);
+}
+.event-card.is-failure .event-header:hover {
+  background: rgba(239,68,68,.12);
+}
+
+/* failure detail block inside event-body */
+.failure-highlight {
+  background: var(--red-bg);
+  border: 1px solid var(--red-border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.failure-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--red-500);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.failure-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.failure-key {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--red-500);
+  opacity: .75;
+  min-width: 70px;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+.failure-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+/* --- Event type badge colours ----------------------------------- */
+.event-type-llm_call      { background: rgba(99,102,241,.15); color: var(--brand-400); }
+.event-type-final_response{ background: rgba(34,197,94,.12);  color: var(--green-500); }
+.event-type-decision      { background: rgba(245,158,11,.12); color: var(--amber-500); }
+.event-type-tool_call     { background: rgba(59,130,246,.12); color: var(--blue-500); }
+.event-type-retrieval     { background: rgba(168,85,247,.12); color: #c084fc; }
+.event-type-memory_write,
+.event-type-memory_read   { background: rgba(20,184,166,.12); color: #2dd4bf; }
+.event-type-error         { background: var(--red-bg);        color: var(--red-500); }
+.event-type-retry         { background: rgba(245,158,11,.12); color: var(--amber-500); }
+.event-type-subagent_start,
+.event-type-subagent_end  { background: rgba(99,102,241,.10); color: var(--brand-400); }
+
+/* --- LLM text block -------------------------------------------- */
+.llm-block {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+.llm-label {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+.llm-label-prompt {
+  background: rgba(245,158,11,.12);
+  color: var(--amber-500);
+  border: 1px solid rgba(245,158,11,.22);
+}
+.llm-label-response {
+  background: rgba(34,197,94,.10);
+  color: var(--green-500);
+  border: 1px solid var(--green-border);
+}
+.llm-text {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- Timestamp in event header ---------------------------------- */
+.event-timestamp {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
