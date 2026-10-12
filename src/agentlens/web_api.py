@@ -8,6 +8,9 @@ Endpoints
 ---------
 - ``POST /api/run``              — Run the agent with a query, return the full trace.
 - ``GET  /api/traces/{trace_id}`` — Retrieve a previously stored trace by ID.
+  Optional query params:
+    - ``status``     — Filter events by status (all | success | failure | partial | pending).
+    - ``event_type`` — Filter events by type (llm_call | tool_call | retrieval | …).
 
 Configuration
 -------------
@@ -28,7 +31,7 @@ import time
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
@@ -66,6 +69,18 @@ app.add_middleware(
 event_store = InMemoryEventStore()
 trace_store = InMemoryTraceStore()
 
+# ---------------------------------------------------------------------------
+# Valid filter value sets
+# ---------------------------------------------------------------------------
+
+_VALID_STATUS_FILTERS: frozenset[str] = frozenset(
+    {"all", "success", "failure", "partial", "pending"}
+)
+
+_VALID_EVENT_TYPES: frozenset[str] = frozenset(
+    et.value for et in EventType
+)
+
 
 # ---------------------------------------------------------------------------
 # Request / Response schemas
@@ -86,15 +101,21 @@ class RunRequest(BaseModel):
 
 
 class SerializedEvent(BaseModel):
-    """Wire-format for a single agent event."""
+    """Wire-format for a single agent event — complete event data."""
 
     event_id: str
+    trace_id: str
+    parent_id: Optional[str] = None
+    agent_id: str
     event_type: str
     status: str
+    timestamp: str
     input_data: Optional[dict[str, Any]] = None
     output_data: Optional[dict[str, Any]] = None
     latency_ms: Optional[float] = None
-    parent_id: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
+    # Derived convenience field — list of direct children event IDs.
+    children: list[str] = Field(default_factory=list)
 
 
 class RunResponse(BaseModel):
@@ -115,6 +136,12 @@ class TraceResponse(BaseModel):
     status: str
     event_count: int
     total_latency_ms: float
+    # Summary counts
+    success_count: int = 0
+    failure_count: int = 0
+    partial_count: int = 0
+    pending_count: int = 0
+    failure_event_ids: list[str] = Field(default_factory=list)
     events: list[SerializedEvent]
 
 
@@ -284,21 +311,72 @@ class _AgentRunner:
 # ---------------------------------------------------------------------------
 
 
-def _serialize_event(event: Any) -> SerializedEvent:
-    """Convert an AgentEvent to the wire-format dict."""
+def _build_children_map(events: list[Any]) -> dict[str, list[str]]:
+    """Return a mapping of event_id -> list of child event_ids."""
+    children: dict[str, list[str]] = {}
+    for event in events:
+        eid = str(event.event_id)
+        children.setdefault(eid, [])
+        if event.parent_id:
+            pid = str(event.parent_id)
+            children.setdefault(pid, [])
+            children[pid].append(eid)
+    return children
+
+
+def _serialize_event(event: Any, children_map: dict[str, list[str]] | None = None) -> SerializedEvent:
+    """Convert an AgentEvent to the complete wire-format dict."""
+    eid = str(event.event_id)
     return SerializedEvent(
-        event_id=str(event.event_id),
+        event_id=eid,
+        trace_id=str(event.trace_id),
+        parent_id=str(event.parent_id) if event.parent_id else None,
+        agent_id=event.agent_id,
         event_type=event.event_type.value
         if hasattr(event.event_type, "value")
         else str(event.event_type),
         status=event.status.value
         if hasattr(event.status, "value")
         else str(event.status),
+        timestamp=event.timestamp.isoformat() if hasattr(event.timestamp, "isoformat") else str(event.timestamp),
         input_data=event.input_data,
         output_data=event.output_data,
         latency_ms=event.latency_ms,
-        parent_id=str(event.parent_id) if event.parent_id else None,
+        metadata=event.metadata,
+        children=children_map.get(eid, []) if children_map else [],
     )
+
+
+def _compute_trace_summary(events: list[Any]) -> dict[str, Any]:
+    """Compute status-based summary fields for a trace."""
+    success_count = sum(
+        1 for e in events
+        if (e.status.value if hasattr(e.status, "value") else str(e.status)) == "success"
+    )
+    failure_count = sum(
+        1 for e in events
+        if (e.status.value if hasattr(e.status, "value") else str(e.status)) == "failure"
+    )
+    partial_count = sum(
+        1 for e in events
+        if (e.status.value if hasattr(e.status, "value") else str(e.status)) == "partial"
+    )
+    pending_count = sum(
+        1 for e in events
+        if (e.status.value if hasattr(e.status, "value") else str(e.status)) == "pending"
+    )
+    failure_event_ids = [
+        str(e.event_id)
+        for e in events
+        if (e.status.value if hasattr(e.status, "value") else str(e.status)) == "failure"
+    ]
+    return {
+        "success_count": success_count,
+        "failure_count": failure_count,
+        "partial_count": partial_count,
+        "pending_count": pending_count,
+        "failure_event_ids": failure_event_ids,
+    }
 
 
 def _extract_answer(trace: Trace) -> str:
@@ -339,18 +417,24 @@ async def run_agent(body: RunRequest) -> RunResponse:
             detail=f"Agent execution failed: {exc}",
         ) from exc
 
+    children_map = _build_children_map(trace.events)
     return RunResponse(
         trace_id=str(trace.trace_id),
         response=_extract_answer(trace),
-        events=[_serialize_event(e) for e in trace.events],
+        events=[_serialize_event(e, children_map) for e in trace.events],
         total_latency_ms=trace.total_latency_ms,
         status="success",
     )
 
 
 @app.get("/api/traces/{trace_id}", response_model=TraceResponse)
-async def get_trace(trace_id: str) -> TraceResponse:
-    """Retrieve a previously stored trace by its UUID."""
+async def get_trace(
+    trace_id: str,
+    status: Optional[str] = Query(default=None, description="Filter events by status (all | success | failure | partial | pending)."),
+    event_type: Optional[str] = Query(default=None, description="Filter events by event type (e.g. tool_call, llm_call)."),
+) -> TraceResponse:
+    """Retrieve a previously stored trace by its UUID, with optional filtering."""
+    # --- Validate trace_id -------------------------------------------------
     try:
         tid = UUID(trace_id)
     except ValueError as exc:
@@ -359,6 +443,26 @@ async def get_trace(trace_id: str) -> TraceResponse:
             detail=f"Invalid trace_id format: {trace_id}",
         ) from exc
 
+    # --- Validate filter values --------------------------------------------
+    if status is not None and status not in _VALID_STATUS_FILTERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid status filter '{status}'. "
+                f"Supported values: {sorted(_VALID_STATUS_FILTERS)}"
+            ),
+        )
+
+    if event_type is not None and event_type not in _VALID_EVENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid event_type filter '{event_type}'. "
+                f"Supported values: {sorted(_VALID_EVENT_TYPES)}"
+            ),
+        )
+
+    # --- Fetch trace -------------------------------------------------------
     try:
         trace = await trace_store.get_trace(tid)
     except KeyError:
@@ -367,13 +471,43 @@ async def get_trace(trace_id: str) -> TraceResponse:
             detail=f"Trace {trace_id} not found",
         )
 
+    all_events = trace.events
+
+    # --- Build children map over the full event list -----------------------
+    children_map = _build_children_map(all_events)
+
+    # --- Compute summary over ALL events (before filtering) ----------------
+    summary = _compute_trace_summary(all_events)
+
+    # --- Apply filters -----------------------------------------------------
+    filtered_events = list(all_events)
+
+    if status is not None and status != "all":
+        filtered_events = [
+            e for e in filtered_events
+            if (e.status.value if hasattr(e.status, "value") else str(e.status)) == status
+        ]
+
+    if event_type is not None:
+        filtered_events = [
+            e for e in filtered_events
+            if (e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type)) == event_type
+        ]
+
+    trace_status = (
+        trace.status.value if hasattr(trace.status, "value") else str(trace.status)
+    )
+
     return TraceResponse(
         trace_id=str(trace.trace_id),
         agent_id=trace.agent_id,
-        status=trace.status.value
-        if hasattr(trace.status, "value")
-        else str(trace.status),
-        event_count=trace.event_count,
+        status=trace_status,
+        event_count=len(filtered_events),
         total_latency_ms=trace.total_latency_ms,
-        events=[_serialize_event(e) for e in trace.events],
+        success_count=summary["success_count"],
+        failure_count=summary["failure_count"],
+        partial_count=summary["partial_count"],
+        pending_count=summary["pending_count"],
+        failure_event_ids=summary["failure_event_ids"],
+        events=[_serialize_event(e, children_map) for e in filtered_events],
     )
