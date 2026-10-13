@@ -28,12 +28,14 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from agentlens.events import EventStatus, EventType, Trace
@@ -53,6 +55,33 @@ app = FastAPI(
     version="0.1.0",
 )
 
+def _resolve_frontend_dir() -> Path | None:
+    """Locate the bundled ``frontend/`` dashboard directory.
+
+    Tries the src-layout location first (``<repo-root>/frontend`` relative
+    to this file), then falls back to the current working directory so the
+    dashboard still mounts when the package is installed non-editable or
+    the server is launched from the repo root.
+    """
+    candidates = [
+        Path(__file__).resolve().parents[2] / "frontend",
+        Path(__file__).resolve().parents[1] / "frontend",
+        Path.cwd() / "frontend",
+    ]
+    for candidate in candidates:
+        if candidate.is_dir() and (candidate / "index.html").is_file():
+            return candidate
+    return None
+
+
+_frontend_dir = _resolve_frontend_dir()
+if _frontend_dir is not None:
+    app.mount(
+        "/app",
+        StaticFiles(directory=str(_frontend_dir), html=True),
+        name="frontend",
+    )
+
 # CORS — read allowed origins from env, default to permissive for dev.
 _cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
@@ -62,6 +91,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Health check & root redirect
+# ---------------------------------------------------------------------------
+
+
+@app.get("/health", tags=["health"])
+async def health_check() -> dict[str, str]:
+    """Health check endpoint for frontend/API monitoring."""
+    return {"status": "ok"}
+
+
+@app.get("/", include_in_schema=False)
+async def root_redirect() -> dict[str, str]:
+    """Redirect root to the dashboard."""
+    return {"message": "AgentLens API", "dashboard": "/app/", "docs": "/docs"}
+
 
 # ---------------------------------------------------------------------------
 # Shared in-memory stores (module-level singletons for the lifetime of the

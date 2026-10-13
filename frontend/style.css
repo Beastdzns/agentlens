@@ -787,3 +787,167 @@ textarea { font-family: inherit; }
   color: var(--text-muted);
   white-space: nowrap;
 }
+
+/* ================================================================
+   Failure Presentation layer  (feature/failure-presentation)
+   ================================================================ */
+
+/* ── Failure Summary Banner ──────────────────────────────────── */
+.failure-summary {
+  margin-bottom: 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--red-border);
+  background: linear-gradient(135deg, rgba(239,68,68,.10) 0%, rgba(239,68,68,.05) 100%);
+  overflow: hidden;
+  animation: slide-down 220ms ease;
+  box-shadow: 0 0 0 1px rgba(239,68,68,.10), 0 4px 20px rgba(239,68,68,.08);
+}
+
+/* header strip */
+.fs-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(239,68,68,.13);
+  border-bottom: 1px solid var(--red-border);
+}
+.fs-header svg { color: var(--red-500); flex-shrink: 0; }
+.fs-header-text {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.fs-status-word {
+  font-weight: 700;
+  color: var(--red-500);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+/* "Show full trace" button inside the banner */
+.fs-all-btn {
+  font-size: 10px !important;
+  padding: 3px 10px !important;
+  white-space: nowrap;
+}
+.fs-all-btn:hover {
+  background: rgba(99,102,241,.12) !important;
+  color: var(--brand-400) !important;
+  border-color: rgba(99,102,241,.3) !important;
+}
+
+/* rows */
+.fs-rows { padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+.fs-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 10px;
+  background: rgba(239,68,68,.06);
+  border: 1px solid rgba(239,68,68,.14);
+  border-radius: var(--radius-sm);
+}
+.fs-step-badge {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(239,68,68,.18);
+  color: var(--red-500);
+  border: 1px solid rgba(239,68,68,.25);
+  white-space: nowrap;
+  margin-top: 1px;
+}
+.fs-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.fs-error {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.45;
+  word-break: break-word;
+}
+.fs-exc {
+  font-size: 10px;
+  color: var(--red-500);
+  font-style: italic;
+  opacity: .85;
+}
+.fs-crumb {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.fs-crumb-type {
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.fs-crumb-id {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,.04);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.fs-id {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ── Enhanced failure-card breadcrumb row ───────────────────── */
+.failure-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.fb-type {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(239,68,68,.12);
+  color: var(--red-500);
+  border: 1px solid rgba(239,68,68,.20);
+}
+.fb-sep { color: var(--text-muted); font-size: 11px; }
+.fb-id {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,.04);
+  padding: 0 5px;
+  border-radius: 3px;
+}
+
+/* ── Retry linkage badges ───────────────────────────────────── */
+.retry-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: .03em;
+}
+.retry-badge code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+/* "retry of" — amber: this event is the retry attempt */
+.retry-badge-of {
+  background: rgba(245,158,11,.12);
+  color: var(--amber-500);
+  border: 1px solid rgba(245,158,11,.22);
+}
+/* "retried by" — indigo: a later event retried this one */
+.retry-badge-by {
+  background: rgba(99,102,241,.12);
+  color: var(--brand-400);
+  border: 1px solid rgba(99,102,241,.22);
+}
