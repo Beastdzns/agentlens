@@ -123,7 +123,7 @@ def _build_synthetic_trace(
             await event_store.save_event(ev)
         await trace_store.save_trace(trace)
 
-    asyncio.get_event_loop().run_until_complete(_save())
+    asyncio.run(_save())
     return str(trace_uuid), [str(e.event_id) for e in events]
 
 
