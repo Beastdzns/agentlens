@@ -8,6 +8,9 @@ Endpoints
 ---------
 - ``POST /api/run``              — Run the agent with a query, return the full trace.
 - ``GET  /api/traces/{trace_id}`` — Retrieve a previously stored trace by ID.
+  Optional query params:
+    - ``status``     — Filter events by status (all | success | failure | partial | pending).
+    - ``event_type`` — Filter events by type (llm_call | tool_call | retrieval | …).
 
 Configuration
 -------------
@@ -25,14 +28,12 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from pathlib import Path
 from typing import Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from agentlens.events import EventStatus, EventType, Trace
@@ -40,6 +41,7 @@ from agentlens.sdk_collector import EventCollector
 from agentlens.storage import InMemoryEventStore, InMemoryTraceStore
 
 load_dotenv()
+
 
 # ---------------------------------------------------------------------------
 # Application setup
@@ -61,11 +63,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static frontend assets (if frontend directory exists)
-_frontend_dir = Path(__file__).resolve().parent.parent.parent / "frontend"
-if _frontend_dir.exists():
-    app.mount("/app", StaticFiles(directory=str(_frontend_dir), html=True), name="frontend")
-
 # ---------------------------------------------------------------------------
 # Shared in-memory stores (module-level singletons for the lifetime of the
 # server process).  A production deployment would swap these for persistent
@@ -74,6 +71,18 @@ if _frontend_dir.exists():
 
 event_store = InMemoryEventStore()
 trace_store = InMemoryTraceStore()
+
+# ---------------------------------------------------------------------------
+# Valid filter value sets
+# ---------------------------------------------------------------------------
+
+_VALID_STATUS_FILTERS: frozenset[str] = frozenset(
+    {"all", "success", "failure", "partial", "pending"}
+)
+
+_VALID_EVENT_TYPES: frozenset[str] = frozenset(
+    et.value for et in EventType
+)
 
 
 # ---------------------------------------------------------------------------
@@ -95,18 +104,21 @@ class RunRequest(BaseModel):
 
 
 class SerializedEvent(BaseModel):
-    """Wire-format for a single agent event."""
+    """Wire-format for a single agent event — complete event data."""
 
     event_id: str
+    trace_id: str
+    parent_id: Optional[str] = None
+    agent_id: str
     event_type: str
     status: str
+    timestamp: str
     input_data: Optional[dict[str, Any]] = None
     output_data: Optional[dict[str, Any]] = None
     latency_ms: Optional[float] = None
-    parent_id: Optional[str] = None
-    agent_id: Optional[str] = None
-    timestamp: Optional[str] = None
     metadata: Optional[dict[str, Any]] = None
+    # Derived convenience field — list of direct children event IDs.
+    children: list[str] = Field(default_factory=list)
 
 
 class RunResponse(BaseModel):
@@ -127,6 +139,12 @@ class TraceResponse(BaseModel):
     status: str
     event_count: int
     total_latency_ms: float
+    # Summary counts
+    success_count: int = 0
+    failure_count: int = 0
+    partial_count: int = 0
+    pending_count: int = 0
+    failure_event_ids: list[str] = Field(default_factory=list)
     events: list[SerializedEvent]
 
 
@@ -149,29 +167,28 @@ class _AgentRunner:
     async def run(self, query: str) -> Trace:
         """Execute the full pipeline and return a finalised Trace."""
         collector = EventCollector(storage_backend=self._event_store)
-
         # --- Initialise Gemini (if key is available) -----------------------
-        gemini_model: Any = None
+        gemini_client: Any = None
         api_key = os.getenv("GEMINI_API_KEY")
         model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         if api_key:
             try:
                 from google import genai
 
-                gemini_model = genai.Client(api_key=api_key)
+                gemini_client = genai.Client(api_key=api_key)
             except ImportError:
                 pass  # dependency not installed — use fallback
 
         async def _ask_gemini(prompt: str, fallback: str) -> str:
-            if gemini_model is None:
+            if gemini_client is None:
                 return fallback
             try:
                 resp = await asyncio.to_thread(
-                    gemini_model.models.generate_content,
+                    gemini_client.models.generate_content,
                     model=model_name,
                     contents=prompt,
                 )
-                return str(resp.text)
+                return resp.text
             except Exception:
                 raise  # let caller handle Gemini failures
 
@@ -234,7 +251,9 @@ class _AgentRunner:
             await collector.record_event(
                 event_type=EventType.MEMORY_WRITE,
                 input_data={"key": "retrieved_evidence"},
-                output_data={"document_count": len(retrieval_event.output_data or {})},
+                output_data={
+                    "document_count": len(retrieval_event.output_data or {})
+                },
                 latency_ms=2.0,
                 metadata={"step": "memory-write"},
             )
@@ -312,30 +331,72 @@ class _AgentRunner:
 # ---------------------------------------------------------------------------
 
 
-def _serialize_event(event: Any) -> SerializedEvent:
-    """Convert an AgentEvent to the wire-format dict."""
-    ts = None
-    if hasattr(event, "timestamp") and event.timestamp is not None:
-        ts = (
-            event.timestamp.isoformat()
-            if hasattr(event.timestamp, "isoformat")
-            else str(event.timestamp)
-        )
+def _build_children_map(events: list[Any]) -> dict[str, list[str]]:
+    """Return a mapping of event_id -> list of child event_ids."""
+    children: dict[str, list[str]] = {}
+    for event in events:
+        eid = str(event.event_id)
+        children.setdefault(eid, [])
+        if event.parent_id:
+            pid = str(event.parent_id)
+            children.setdefault(pid, [])
+            children[pid].append(eid)
+    return children
 
+
+def _serialize_event(event: Any, children_map: dict[str, list[str]] | None = None) -> SerializedEvent:
+    """Convert an AgentEvent to the complete wire-format dict."""
+    eid = str(event.event_id)
     return SerializedEvent(
-        event_id=str(event.event_id),
-        event_type=(
-            event.event_type.value if hasattr(event.event_type, "value") else str(event.event_type)
-        ),
-        status=event.status.value if hasattr(event.status, "value") else str(event.status),
+        event_id=eid,
+        trace_id=str(event.trace_id),
+        parent_id=str(event.parent_id) if event.parent_id else None,
+        agent_id=event.agent_id,
+        event_type=event.event_type.value
+        if hasattr(event.event_type, "value")
+        else str(event.event_type),
+        status=event.status.value
+        if hasattr(event.status, "value")
+        else str(event.status),
+        timestamp=event.timestamp.isoformat() if hasattr(event.timestamp, "isoformat") else str(event.timestamp),
         input_data=event.input_data,
         output_data=event.output_data,
         latency_ms=event.latency_ms,
-        parent_id=str(event.parent_id) if event.parent_id else None,
-        agent_id=getattr(event, "agent_id", None),
-        timestamp=ts,
-        metadata=getattr(event, "metadata", None),
+        metadata=event.metadata,
+        children=children_map.get(eid, []) if children_map else [],
     )
+
+
+def _compute_trace_summary(events: list[Any]) -> dict[str, Any]:
+    """Compute status-based summary fields for a trace."""
+    success_count = sum(
+        1 for e in events
+        if (e.status.value if hasattr(e.status, "value") else str(e.status)) == "success"
+    )
+    failure_count = sum(
+        1 for e in events
+        if (e.status.value if hasattr(e.status, "value") else str(e.status)) == "failure"
+    )
+    partial_count = sum(
+        1 for e in events
+        if (e.status.value if hasattr(e.status, "value") else str(e.status)) == "partial"
+    )
+    pending_count = sum(
+        1 for e in events
+        if (e.status.value if hasattr(e.status, "value") else str(e.status)) == "pending"
+    )
+    failure_event_ids = [
+        str(e.event_id)
+        for e in events
+        if (e.status.value if hasattr(e.status, "value") else str(e.status)) == "failure"
+    ]
+    return {
+        "success_count": success_count,
+        "failure_count": failure_count,
+        "partial_count": partial_count,
+        "pending_count": pending_count,
+        "failure_event_ids": failure_event_ids,
+    }
 
 
 def _extract_answer(trace: Trace) -> str:
@@ -346,7 +407,7 @@ def _extract_answer(trace: Trace) -> str:
             and event.output_data
             and "answer" in event.output_data
         ):
-            return str(event.output_data["answer"])
+            return event.output_data["answer"]
     # Fallback: look for the last LLM_CALL response.
     for event in reversed(trace.events):
         if (
@@ -354,30 +415,13 @@ def _extract_answer(trace: Trace) -> str:
             and event.output_data
             and "response" in event.output_data
         ):
-            return str(event.output_data["response"])
+            return event.output_data["response"]
     return ""
 
 
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
-
-
-@app.get("/health")
-async def health_check() -> dict[str, str]:
-    """Health check endpoint polled by the frontend dashboard."""
-    return {"status": "ok", "app": "AgentLens API", "version": "0.1.0"}
-
-
-@app.get("/")
-async def root() -> dict[str, str]:
-    """Root info endpoint providing service status and navigation links."""
-    return {
-        "app": "AgentLens API",
-        "status": "online",
-        "docs": "/docs",
-        "dashboard": "/app/",
-    }
 
 
 @app.post("/api/run", response_model=RunResponse)
@@ -393,18 +437,24 @@ async def run_agent(body: RunRequest) -> RunResponse:
             detail=f"Agent execution failed: {exc}",
         ) from exc
 
+    children_map = _build_children_map(trace.events)
     return RunResponse(
         trace_id=str(trace.trace_id),
         response=_extract_answer(trace),
-        events=[_serialize_event(e) for e in trace.events],
+        events=[_serialize_event(e, children_map) for e in trace.events],
         total_latency_ms=trace.total_latency_ms,
         status="success",
     )
 
 
 @app.get("/api/traces/{trace_id}", response_model=TraceResponse)
-async def get_trace(trace_id: str) -> TraceResponse:
-    """Retrieve a previously stored trace by its UUID."""
+async def get_trace(
+    trace_id: str,
+    status: Optional[str] = Query(default=None, description="Filter events by status (all | success | failure | partial | pending)."),
+    event_type: Optional[str] = Query(default=None, description="Filter events by event type (e.g. tool_call, llm_call)."),
+) -> TraceResponse:
+    """Retrieve a previously stored trace by its UUID, with optional filtering."""
+    # --- Validate trace_id -------------------------------------------------
     try:
         tid = UUID(trace_id)
     except ValueError as exc:
@@ -413,25 +463,71 @@ async def get_trace(trace_id: str) -> TraceResponse:
             detail=f"Invalid trace_id format: {trace_id}",
         ) from exc
 
+    # --- Validate filter values --------------------------------------------
+    if status is not None and status not in _VALID_STATUS_FILTERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid status filter '{status}'. "
+                f"Supported values: {sorted(_VALID_STATUS_FILTERS)}"
+            ),
+        )
+
+    if event_type is not None and event_type not in _VALID_EVENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid event_type filter '{event_type}'. "
+                f"Supported values: {sorted(_VALID_EVENT_TYPES)}"
+            ),
+        )
+
+    # --- Fetch trace -------------------------------------------------------
     try:
         trace = await trace_store.get_trace(tid)
-    except KeyError as exc:
+    except KeyError:
         raise HTTPException(
             status_code=404,
             detail=f"Trace {trace_id} not found",
-        ) from exc
+        )
+
+    all_events = trace.events
+
+    # --- Build children map over the full event list -----------------------
+    children_map = _build_children_map(all_events)
+
+    # --- Compute summary over ALL events (before filtering) ----------------
+    summary = _compute_trace_summary(all_events)
+
+    # --- Apply filters -----------------------------------------------------
+    filtered_events = list(all_events)
+
+    if status is not None and status != "all":
+        filtered_events = [
+            e for e in filtered_events
+            if (e.status.value if hasattr(e.status, "value") else str(e.status)) == status
+        ]
+
+    if event_type is not None:
+        filtered_events = [
+            e for e in filtered_events
+            if (e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type)) == event_type
+        ]
+
+    trace_status = (
+        trace.status.value if hasattr(trace.status, "value") else str(trace.status)
+    )
 
     return TraceResponse(
         trace_id=str(trace.trace_id),
         agent_id=trace.agent_id,
-        status=trace.status.value if hasattr(trace.status, "value") else str(trace.status),
-        event_count=trace.event_count,
+        status=trace_status,
+        event_count=len(filtered_events),
         total_latency_ms=trace.total_latency_ms,
-        events=[_serialize_event(e) for e in trace.events],
+        success_count=summary["success_count"],
+        failure_count=summary["failure_count"],
+        partial_count=summary["partial_count"],
+        pending_count=summary["pending_count"],
+        failure_event_ids=summary["failure_event_ids"],
+        events=[_serialize_event(e, children_map) for e in filtered_events],
     )
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run("agentlens.web_api:app", host="0.0.0.0", port=8000, reload=True)
