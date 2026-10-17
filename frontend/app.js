@@ -246,6 +246,24 @@ function animateLoadingSteps() {
 }
 
 // ── Render full results ───────────────────────────────────────────────────
+/**
+ * Decide the default filter tab for a trace.
+ *
+ * Returns `'failure'` when the trace contains any failed events (either via
+ * the API's `failure_count` summary or by scanning the event statuses),
+ * otherwise `'all'`.  Pure helper — kept separate so it can be unit-tested.
+ *
+ * @param {Object} data    Trace response payload (may contain failure_count).
+ * @param {Array}  events  Events belonging to the trace.
+ * @returns {'failure'|'all'}
+ */
+function defaultFilterFor(data, events) {
+  const hasFailures = (data && data.failure_count > 0) ||
+    (events || []).some(e => statusClass(e.status) === 'failure');
+  return hasFailures ? 'failure' : 'all';
+}
+window.defaultFilterFor = defaultFilterFor;
+
 function renderResults(data) {
   lastData     = data;
   sortedEvents = sortEvents(data.events || []);
@@ -271,9 +289,7 @@ function renderResults(data) {
 
 
   // -- Smart filter: default to 'failure' tab when trace has failures
-  const hasFailures = (data.failure_count > 0) ||
-    sortedEvents.some(e => statusClass(e.status) === 'failure');
-  const defaultFilter = hasFailures ? 'failure' : 'all';
+  const defaultFilter = defaultFilterFor(data, sortedEvents);
   if (activeFilter !== defaultFilter) {
     activeFilter = defaultFilter;
     filterBtns.forEach(b => {
@@ -357,6 +373,7 @@ function renderFailureSummary(data, events) {
     <div class="fs-rows">${rows}</div>`;
   failureSummary.classList.remove('hidden');
 }
+window.renderFailureSummary = renderFailureSummary;
 // ── Render the event timeline ─────────────────────────────────────────────
 function renderEventList() {
   const events   = filterEvents(sortedEvents, activeFilter);
@@ -446,43 +463,44 @@ function buildFailureBlock(ev) {
   let html = '<div class="failure-highlight">';
   html += '<div class="failure-title"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> Failure Details</div>';
 
-  if (err)     html += <div class="failure-row"><span class="failure-key">Error</span><span class="failure-val"></span></div>;
-  if (excType) html += <div class="failure-row"><span class="failure-key">Exception</span><span class="failure-val"></span></div>;
-  if (excMsg)  html += <div class="failure-row"><span class="failure-key">Message</span><span class="failure-val"></span></div>;
+  if (err)     html += `<div class="failure-row"><span class="failure-key">Error</span><span class="failure-val">${escHtml(String(err))}</span></div>`;
+  if (excType) html += `<div class="failure-row"><span class="failure-key">Exception</span><span class="failure-val">${escHtml(excType)}</span></div>`;
+  if (excMsg)  html += `<div class="failure-row"><span class="failure-key">Message</span><span class="failure-val">${escHtml(excMsg)}</span></div>`;
 
   // Breadcrumb row
   if (parentType) {
-    html += <div class="failure-row">
+    html += `<div class="failure-row">
       <span class="failure-key">Parent</span>
       <span class="failure-val">
         <span class="failure-breadcrumb">
-          <span class="fb-type"></span>
+          <span class="fb-type">${escHtml(parentType)}</span>
           <span class="fb-sep">·</span>
-          <code class="fb-id"></code>
+          <code class="fb-id">${escHtml(shortId(ev.parent_id))}</code>
         </span>
       </span>
-    </div>;
+    </div>`;
   } else if (ev.parent_id) {
-    html += <div class="failure-row"><span class="failure-key">Parent ID</span><span class="failure-val"></span></div>;
+    html += `<div class="failure-row"><span class="failure-key">Parent ID</span><span class="failure-val">${escHtml(ev.parent_id)}</span></div>`;
   }
 
   // Retry linkage badges
   if (retryOf) {
-    html += <div class="failure-row">
+    html += `<div class="failure-row">
       <span class="failure-key">Retry of</span>
-      <span class="failure-val"><span class="retry-badge retry-badge-of">↩ retry of <code></code></span></span>
-    </div>;
+      <span class="failure-val"><span class="retry-badge retry-badge-of">↩ retry of <code>${escHtml(shortId(retryOf))}</code></span></span>
+    </div>`;
   }
   if (retriedBy) {
-    html += <div class="failure-row">
+    html += `<div class="failure-row">
       <span class="failure-key">Retried by</span>
-      <span class="failure-val"><span class="retry-badge retry-badge-by">↻ retried by <code></code></span></span>
-    </div>;
+      <span class="failure-val"><span class="retry-badge retry-badge-by">↻ retried by <code>${escHtml(shortId(retriedBy))}</code></span></span>
+    </div>`;
   }
 
   html += '</div>';
   return html;
 }
+window.buildFailureBlock = buildFailureBlock;
 
 // ── LLM-specific display block ────────────────────────────────────────────
 function buildLlmBlock(ev) {

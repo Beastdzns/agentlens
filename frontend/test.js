@@ -274,6 +274,119 @@ function testFailureDetailsShape() {
   assertEqual(event.metadata.exception_message, 'database unavailable', 'failure UX: exception message is available');
 }
 
+/* ── 9. Phase 8: failure presentation ───────────────────────── */
+
+function testDefaultFilterFor() {
+  const okEvents   = [makeEvent({ event_id: 'a', status: 'success' })];
+  const failEvents = [
+    makeEvent({ event_id: 'a', status: 'success' }),
+    makeEvent({ event_id: 'b', status: 'failure' }),
+  ];
+
+  assertEqual(defaultFilterFor({ failure_count: 0 }, okEvents),   'all',     'defaultFilterFor: clean trace -> all');
+  assertEqual(defaultFilterFor({ failure_count: 1 }, okEvents),   'failure', 'defaultFilterFor: failure_count drives default');
+  assertEqual(defaultFilterFor({}, failEvents),                   'failure', 'defaultFilterFor: scans event statuses');
+  assertEqual(defaultFilterFor(null, okEvents),                   'all',     'defaultFilterFor: null data -> all');
+  assertEqual(defaultFilterFor({ failure_count: 0 }, []),         'all',     'defaultFilterFor: empty events -> all');
+}
+
+function testRenderFailureSummaryShowsFailedStep() {
+  const parent = makeEvent({ event_id: 'parent-1', event_type: 'tool_call', status: 'success' });
+  const failed = makeEvent({
+    event_id: 'fail-1',
+    parent_id: 'parent-1',
+    event_type: 'llm_call',
+    status: 'failure',
+    output_data: { error: 'quota exceeded' },
+    metadata: { exception_type: 'RuntimeError', exception_message: 'quota exceeded', step: 'synthesis' },
+  });
+  const events = [parent, failed];
+
+  renderFailureSummary(
+    { status: 'failure', failure_count: 1, failure_event_ids: ['fail-1'] },
+    events
+  );
+
+  const el = document.getElementById('failureSummary');
+  const html = el.innerHTML;
+  assert(html.includes('quota exceeded'),       'failure banner: shows the error message');
+  assert(html.includes('RuntimeError'),         'failure banner: shows the exception type');
+  assert(html.includes('LLM CALL'),             'failure banner: shows the failed step type');
+  assert(html.includes('TOOL CALL'),            'failure banner: shows the parent breadcrumb');
+  assert(html.includes('1 failed step'),        'failure banner: reports failed step count');
+  assert(!el.classList.contains('hidden'),      'failure banner: is visible when failures exist');
+}
+
+function testRenderFailureSummaryHiddenWithoutFailures() {
+  const events = [
+    makeEvent({ event_id: 'a', status: 'success' }),
+    makeEvent({ event_id: 'b', status: 'success' }),
+  ];
+  renderFailureSummary({ status: 'success', failure_count: 0 }, events);
+  const el = document.getElementById('failureSummary');
+  assert(el.classList.contains('hidden'), 'failure banner: hidden when trace has no failures');
+  assertEqual(el.innerHTML, '',           'failure banner: cleared when trace has no failures');
+}
+
+function testRenderFailureSummaryFallsBackToScan() {
+  // No failure_event_ids provided -> banner must still find the failed event.
+  const failed = makeEvent({
+    event_id: 'fail-2',
+    event_type: 'tool_call',
+    status: 'error',
+    output_data: { error: 'tool crashed' },
+    metadata: { exception_type: 'ConnectionError' },
+  });
+  renderFailureSummary({ status: 'failure' }, [failed]);
+  const html = document.getElementById('failureSummary').innerHTML;
+  assert(html.includes('tool crashed'),   'failure banner: scan fallback finds error message');
+  assert(html.includes('ConnectionError'),'failure banner: scan fallback finds exception type');
+}
+
+function testBuildFailureBlockFields() {
+  const parent = makeEvent({ event_id: 'p-1', event_type: 'decision', status: 'success' });
+  sortedEvents = [parent];
+
+  const failed = makeEvent({
+    event_id: 'f-1',
+    parent_id: 'p-1',
+    status: 'failure',
+    output_data: { error: 'boom' },
+    metadata: { exception_type: 'ValueError', exception_message: 'bad value' },
+  });
+
+  const html = buildFailureBlock(failed);
+  assert(html.includes('boom'),        'failure block: renders error message');
+  assert(html.includes('ValueError'),  'failure block: renders exception type');
+  assert(html.includes('bad value'),   'failure block: renders exception message');
+  assert(html.includes('DECISION'),    'failure block: renders parent breadcrumb');
+}
+
+function testBuildFailureBlockRetryBadges() {
+  sortedEvents = [];
+  const retried = makeEvent({
+    event_id: 'r-2',
+    status: 'success',
+    metadata: { retry_of: 'r-1', attempt: 2 },
+  });
+  const html = buildFailureBlock(retried);
+  assert(html.includes('retry-badge-of'), 'failure block: renders "retry of" badge');
+  assert(html.includes('retry of'),       'failure block: retry-of label present');
+}
+
+function testBuildFailureBlockRetriedBy() {
+  sortedEvents = [];
+  const original = makeEvent({
+    event_id: 'o-1',
+    status: 'failure',
+    output_data: { error: 'first attempt failed' },
+    metadata: { exception_type: 'TimeoutError', retried_by: 'o-2' },
+  });
+  const html = buildFailureBlock(original);
+  assert(html.includes('retry-badge-by'), 'failure block: renders "retried by" badge');
+  assert(html.includes('TimeoutError'),   'failure block: still shows exception type');
+}
+
 /* ── Run all tests ───────────────────────────────────────────── */
 
 function runAllTests() {
@@ -291,5 +404,12 @@ function runAllTests() {
   testDeepTreeAndLongPayload();
   testMissingTimestampAndDataFields();
   testFailureDetailsShape();
+  testDefaultFilterFor();
+  testRenderFailureSummaryShowsFailedStep();
+  testRenderFailureSummaryHiddenWithoutFailures();
+  testRenderFailureSummaryFallsBackToScan();
+  testBuildFailureBlockFields();
+  testBuildFailureBlockRetryBadges();
+  testBuildFailureBlockRetriedBy();
   renderReport();
 }
