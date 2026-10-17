@@ -212,7 +212,27 @@ class _AgentRunner:
         self._trace_store = tr_store
 
     async def run(self, query: str) -> Trace:
-        """Execute the full pipeline and return a finalised Trace."""
+        """Execute the full pipeline and return a finalised Trace.
+
+        Each of the six pipeline steps is wrapped in a per-step capture context
+        manager (``capture_llm_call``, ``capture_tool_call``, ``capture_step``).
+
+        * On **success** the wrapper records a ``SUCCESS`` event before yielding
+          back to this method.
+        * On **any exception** the wrapper records a ``FAILURE`` event carrying
+          ``exception_type`` and ``exception_message`` in its metadata **before
+          re-raising**, so the trace always contains a persisted failure record
+          even if the process is interrupted mid-run.
+
+        The single outer ``except`` block is now responsible *only* for calling
+        ``end_trace`` and persisting the trace as ``FAILURE`` — the per-step
+        wrappers handle the granular failure recording.
+
+        **Retry linkage**: when retrying a step after a failure, pass
+        ``retry_of=<failed_event_id>`` and an incremented ``attempt`` counter to
+        the wrapper.  Both values are stored in the new event's metadata so the
+        UI can trace the retry chain.
+        """
         collector = EventCollector(storage_backend=self._event_store)
         # --- Initialise Gemini (if key is available) -----------------------
         gemini_client: Any = None
@@ -237,7 +257,7 @@ class _AgentRunner:
                 )
                 return resp.text
             except Exception:
-                raise  # let caller handle Gemini failures
+                raise  # let caller (step wrapper) handle Gemini failures
 
         # --- Start trace ---------------------------------------------------
         trace_id = await collector.start_trace(agent_id="multistep-research-agent")
@@ -245,12 +265,25 @@ class _AgentRunner:
         answer = ""
 
         try:
+            # ------------------------------------------------------------------
             # Step 1 — Planning
+            # capture_llm_call times the call, records SUCCESS on return, and
+            # records FAILURE with exception_type + exception_message on error.
+            # ------------------------------------------------------------------
             planning_prompt = f"Create a concise three-step research plan for: {query}"
-            plan = await _ask_gemini(
-                planning_prompt,
-                "1. Search current sources 2. Retrieve useful evidence 3. Synthesize findings",
-            )
+            async with collector.capture_llm_call(
+                prompt=planning_prompt,
+                model=model_name,
+                metadata={"step": "planning"},
+            ) as planning_result:
+                planning_result[0] = await _ask_gemini(
+                    planning_prompt,
+                    "1. Search current sources 2. Retrieve useful evidence 3. Synthesize findings",
+                )
+            plan = planning_result[0]
+
+            # Record the planning decision event (with the plan as output_data)
+            # used for parent-linkage in subsequent steps.
             planning_event = await collector.record_event(
                 event_type=EventType.DECISION,
                 input_data={"query": query},
@@ -259,42 +292,71 @@ class _AgentRunner:
                 metadata={"step": "planning"},
             )
 
+            # ------------------------------------------------------------------
             # Step 2 — Web search (simulated tool call)
+            # capture_tool_call records SUCCESS with input+output, or FAILURE
+            # with exception metadata on error, then re-raises.
+            # ------------------------------------------------------------------
             collector.push_parent(planning_event.event_id)
-            search_started = time.perf_counter()
-            search_event = await collector.record_event(
-                event_type=EventType.TOOL_CALL,
+            async with collector.capture_tool_call(
+                "web_search",
                 input_data={"tool": "web_search", "query": query},
-                output_data={
+                metadata={"step": "search"},
+            ) as search_result:
+                search_result[0] = {
                     "hits": [
                         "research-paper-1",
                         "research-paper-2",
                         "technical-report-1",
                     ]
-                },
-                latency_ms=(time.perf_counter() - search_started) * 1000,
+                }
+
+            # Record a dedicated TOOL_CALL event for parent-linkage purposes.
+            search_event = await collector.record_event(
+                event_type=EventType.TOOL_CALL,
+                input_data={"tool": "web_search", "query": query},
+                output_data=search_result[0],
+                latency_ms=0.0,
                 metadata={"step": "search", "tool": "web_search"},
             )
 
+            # ------------------------------------------------------------------
             # Step 3 — Retrieval
+            # ------------------------------------------------------------------
             collector.push_parent(search_event.event_id)
-            retrieval_started = time.perf_counter()
+            retrieval_docs: dict[str, Any] = {
+                "documents": [
+                    {"id": "research-paper-1", "relevance": 0.94},
+                    {"id": "research-paper-2", "relevance": 0.87},
+                    {"id": "technical-report-1", "relevance": 0.81},
+                ]
+            }
+            async with collector.capture_step(
+                EventType.RETRIEVAL,
+                input_data={"top_k": 3, "query": query},
+                metadata={"step": "retrieval"},
+            ):
+                pass  # Simulated retrieval — no external I/O
+
             retrieval_event = await collector.record_event(
                 event_type=EventType.RETRIEVAL,
                 input_data={"top_k": 3, "query": query},
-                output_data={
-                    "documents": [
-                        {"id": "research-paper-1", "relevance": 0.94},
-                        {"id": "research-paper-2", "relevance": 0.87},
-                        {"id": "technical-report-1", "relevance": 0.81},
-                    ]
-                },
-                latency_ms=(time.perf_counter() - retrieval_started) * 1000,
+                output_data=retrieval_docs,
+                latency_ms=0.0,
                 metadata={"step": "retrieval"},
             )
             collector.pop_parent()
 
+            # ------------------------------------------------------------------
             # Step 4 — Memory write
+            # ------------------------------------------------------------------
+            async with collector.capture_step(
+                EventType.MEMORY_WRITE,
+                input_data={"key": "retrieved_evidence"},
+                metadata={"step": "memory-write"},
+            ):
+                pass  # In-memory store, no external I/O
+
             await collector.record_event(
                 event_type=EventType.MEMORY_WRITE,
                 input_data={"key": "retrieved_evidence"},
@@ -306,27 +368,45 @@ class _AgentRunner:
             )
             collector.pop_parent()
 
+            # ------------------------------------------------------------------
             # Step 5 — Synthesis LLM call
-            synthesis_started = time.perf_counter()
+            # If Gemini raises here, capture_llm_call records a FAILURE event
+            # with exception_type + exception_message before re-raising so the
+            # outer except only has to persist/finalise the trace.
+            #
+            # Retry example (not triggered in the default path):
+            #   If a previous synthesis attempt failed and we stored its
+            #   event_id as `failed_synthesis_id`, we would call:
+            #       collector.capture_llm_call(
+            #           prompt=..., retry_of=failed_synthesis_id, attempt=2
+            #       )
+            # ------------------------------------------------------------------
             synthesis_prompt = (
                 f"Answer this query using the plan and evidence below:\n"
                 f"Query: {query}\nPlan: {plan}\n"
                 f"Evidence: {retrieval_event.output_data}"
             )
-            answer = await _ask_gemini(
-                synthesis_prompt,
-                "The evidence suggests a measurable, traceable workflow with "
-                "planning, retrieval, and synthesis.",
-            )
-            await collector.record_event(
-                event_type=EventType.LLM_CALL,
-                input_data={"prompt": query, "plan": plan},
-                output_data={"response": answer},
-                latency_ms=(time.perf_counter() - synthesis_started) * 1000,
-                metadata={"step": "synthesis", "model": model_name},
-            )
+            async with collector.capture_llm_call(
+                prompt=query,
+                model=model_name,
+                metadata={"step": "synthesis"},
+            ) as synthesis_result:
+                synthesis_result[0] = await _ask_gemini(
+                    synthesis_prompt,
+                    "The evidence suggests a measurable, traceable workflow with "
+                    "planning, retrieval, and synthesis.",
+                )
+            answer = synthesis_result[0]
 
+            # ------------------------------------------------------------------
             # Step 6 — Final response
+            # ------------------------------------------------------------------
+            async with collector.capture_step(
+                EventType.FINAL_RESPONSE,
+                metadata={"step": "final-response"},
+            ):
+                pass  # No work; the wrapper records the SUCCESS bookend
+
             await collector.record_event(
                 event_type=EventType.FINAL_RESPONSE,
                 output_data={"answer": answer},
@@ -336,13 +416,11 @@ class _AgentRunner:
 
             await collector.end_trace()
 
-        except Exception as exc:
-            await collector.record_event(
-                event_type=EventType.ERROR,
-                status=EventStatus.FAILURE,
-                output_data={"error": str(exc)},
-                metadata={"exception_type": type(exc).__name__},
-            )
+        except Exception:
+            # Each per-step wrapper already recorded a FAILURE event (with
+            # exception_type + exception_message) before re-raising, so the
+            # trace contains exactly one FAILURE event for the broken step.
+            # We only need to finalise the trace and persist it as FAILURE.
             await collector.end_trace()
 
             failed_events = await self._event_store.get_trace_events(trace_id)

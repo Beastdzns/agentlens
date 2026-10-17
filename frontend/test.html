@@ -71,7 +71,8 @@
      'mockPanel','loadingState','emptyState','errorBanner','errorMessage',
      'dismissError','resultsView','loadingStep','apiStatus','apiStatusText',
      'statTraceId','statLatency','statEventCount','statStatus','responseText',
-     'eventList','traceMeta','metaTraceId','metaStatus','metaLatency','metaEventCount'
+     'eventList','traceMeta','metaTraceId','metaStatus','metaLatency','metaEventCount',
+     'failureSummary'
     ].forEach(id => {
       const orig = document.getElementById.bind(document);
       if (!orig(id)) {

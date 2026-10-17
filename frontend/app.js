@@ -1,4 +1,4 @@
-/**
+﻿/**
  * AgentLens – app.js  (feature/timeline_intf)
  *
  * Change API_BASE_URL to point at a different backend:
@@ -160,6 +160,7 @@ const eventList      = document.getElementById('eventList');
 const filterBtns     = document.querySelectorAll('.filter-btn');
 
 const traceMeta      = document.getElementById('traceMeta');
+const failureSummary = document.getElementById('failureSummary');
 const metaTraceId    = document.getElementById('metaTraceId');
 const metaStatus     = document.getElementById('metaStatus');
 const metaLatency    = document.getElementById('metaLatency');
@@ -245,6 +246,24 @@ function animateLoadingSteps() {
 }
 
 // ── Render full results ───────────────────────────────────────────────────
+/**
+ * Decide the default filter tab for a trace.
+ *
+ * Returns `'failure'` when the trace contains any failed events (either via
+ * the API's `failure_count` summary or by scanning the event statuses),
+ * otherwise `'all'`.  Pure helper — kept separate so it can be unit-tested.
+ *
+ * @param {Object} data    Trace response payload (may contain failure_count).
+ * @param {Array}  events  Events belonging to the trace.
+ * @returns {'failure'|'all'}
+ */
+function defaultFilterFor(data, events) {
+  const hasFailures = (data && data.failure_count > 0) ||
+    (events || []).some(e => statusClass(e.status) === 'failure');
+  return hasFailures ? 'failure' : 'all';
+}
+window.defaultFilterFor = defaultFilterFor;
+
 function renderResults(data) {
   lastData     = data;
   sortedEvents = sortEvents(data.events || []);
@@ -268,12 +287,93 @@ function renderResults(data) {
   metaEventCount.textContent = sortedEvents.length + ' events';
   traceMeta.classList.remove('hidden');
 
+
+  // -- Smart filter: default to 'failure' tab when trace has failures
+  const defaultFilter = defaultFilterFor(data, sortedEvents);
+  if (activeFilter !== defaultFilter) {
+    activeFilter = defaultFilter;
+    filterBtns.forEach(b => {
+      b.classList.toggle('active', b.dataset.filter === activeFilter);
+    });
+  }
+
+  // -- Failure summary banner (shows above timeline for failed traces)
+  renderFailureSummary(data, sortedEvents);
+
   renderEventList();
 
   resultsView.classList.remove('hidden');
   emptyState.classList.add('hidden');
 }
 
+// ── Render failure summary banner ────────────────────────────────────────
+/**
+ * Builds and shows the red diagnostic strip above the event timeline.
+ * Only visible when the trace contains at least one failed event.
+ * Uses data.failure_event_ids when provided; falls back to scanning events.
+ */
+function renderFailureSummary(data, events) {
+  const eventsById = new Map(events.map(e => [e.event_id, e]));
+
+  // Resolve the set of failed events to highlight in the banner
+  let failedEvents = [];
+  if (Array.isArray(data.failure_event_ids) && data.failure_event_ids.length) {
+    failedEvents = data.failure_event_ids
+      .map(id => eventsById.get(id))
+      .filter(Boolean);
+  }
+  // Fall back to scanning all events when the field isn't present
+  if (failedEvents.length === 0) {
+    failedEvents = events.filter(e => statusClass(e.status) === 'failure');
+  }
+
+  if (failedEvents.length === 0) {
+    failureSummary.classList.add('hidden');
+    failureSummary.innerHTML = '';
+    return;
+  }
+
+  const traceStatusCls = statusClass(data.status);
+  const rows = failedEvents.map(ev => {
+    const typeLabel = (ev.event_type || 'unknown').replace(/_/g, ' ').toUpperCase();
+    const errMsg    = ev.output_data?.error ?? ev.output_data?.message
+                      ?? ev.metadata?.exception_message ?? '(no error message)';
+    const excType   = ev.metadata?.exception_type ?? null;
+    const parentEv  = ev.parent_id ? eventsById.get(ev.parent_id) : null;
+    const parentLbl = parentEv
+      ? (parentEv.event_type || 'unknown').replace(/_/g, ' ').toUpperCase()
+      : null;
+
+    return `
+      <div class="fs-row">
+        <div class="fs-step-badge">${escHtml(typeLabel)}</div>
+        <div class="fs-detail">
+          <div class="fs-error">${escHtml(String(errMsg))}${excType ? ` <span class="fs-exc">(${escHtml(excType)})</span>` : ''}</div>
+          ${parentLbl ? `<div class="fs-crumb">↳ triggered inside <span class="fs-crumb-type">${escHtml(parentLbl)}</span> · parent <code class="fs-crumb-id">${escHtml(shortId(ev.parent_id))}</code></div>` : ''}
+        </div>
+        <div class="fs-id"><code>${escHtml(shortId(ev.event_id))}</code></div>
+      </div>`;
+  }).join('');
+
+  failureSummary.innerHTML = `
+    <div class="fs-header">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/>
+        <line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      <span class="fs-header-text">
+        Trace <span class="fs-status-word">${escHtml(data.status || 'failed')}</span>
+        &mdash; ${failedEvents.length} failed step${failedEvents.length > 1 ? 's' : ''} detected
+      </span>
+      <button class="fs-all-btn filter-btn" data-filter="all"
+              onclick="document.querySelector('.filter-btn[data-filter=all]').click()">
+        Show full trace
+      </button>
+    </div>
+    <div class="fs-rows">${rows}</div>`;
+  failureSummary.classList.remove('hidden');
+}
+window.renderFailureSummary = renderFailureSummary;
 // ── Render the event timeline ─────────────────────────────────────────────
 function renderEventList() {
   const events   = filterEvents(sortedEvents, activeFilter);
@@ -347,21 +447,60 @@ function renderEventList() {
 
 // ── Build failure highlight block ─────────────────────────────────────────
 function buildFailureBlock(ev) {
-  const err      = ev.output_data?.error ?? null;
+  const err      = ev.output_data?.error ?? ev.output_data?.message ?? null;
   const excType  = ev.metadata?.exception_type ?? null;
   const excMsg   = ev.metadata?.exception_message ?? ev.metadata?.exc_message ?? null;
+  const retryOf  = ev.metadata?.retry_of ?? null;
+  const retriedBy = ev.metadata?.retried_by ?? null;
+
+  // Breadcrumb: look up parent event type for context
+  const eventsById = new Map((sortedEvents || []).map(e => [e.event_id, e]));
+  const parentEv   = ev.parent_id ? eventsById.get(ev.parent_id) : null;
+  const parentType = parentEv
+    ? (parentEv.event_type || '').replace(/_/g, ' ').toUpperCase()
+    : null;
 
   let html = '<div class="failure-highlight">';
   html += '<div class="failure-title"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> Failure Details</div>';
 
-  if (err)      html += `<div class="failure-row"><span class="failure-key">Error</span><span class="failure-val">${escHtml(String(err))}</span></div>`;
-  if (excType)  html += `<div class="failure-row"><span class="failure-key">Exception</span><span class="failure-val">${escHtml(excType)}</span></div>`;
-  if (excMsg)   html += `<div class="failure-row"><span class="failure-key">Message</span><span class="failure-val">${escHtml(excMsg)}</span></div>`;
-  if (ev.parent_id) html += `<div class="failure-row"><span class="failure-key">Parent ID</span><span class="failure-val">${escHtml(ev.parent_id)}</span></div>`;
+  if (err)     html += `<div class="failure-row"><span class="failure-key">Error</span><span class="failure-val">${escHtml(String(err))}</span></div>`;
+  if (excType) html += `<div class="failure-row"><span class="failure-key">Exception</span><span class="failure-val">${escHtml(excType)}</span></div>`;
+  if (excMsg)  html += `<div class="failure-row"><span class="failure-key">Message</span><span class="failure-val">${escHtml(excMsg)}</span></div>`;
+
+  // Breadcrumb row
+  if (parentType) {
+    html += `<div class="failure-row">
+      <span class="failure-key">Parent</span>
+      <span class="failure-val">
+        <span class="failure-breadcrumb">
+          <span class="fb-type">${escHtml(parentType)}</span>
+          <span class="fb-sep">·</span>
+          <code class="fb-id">${escHtml(shortId(ev.parent_id))}</code>
+        </span>
+      </span>
+    </div>`;
+  } else if (ev.parent_id) {
+    html += `<div class="failure-row"><span class="failure-key">Parent ID</span><span class="failure-val">${escHtml(ev.parent_id)}</span></div>`;
+  }
+
+  // Retry linkage badges
+  if (retryOf) {
+    html += `<div class="failure-row">
+      <span class="failure-key">Retry of</span>
+      <span class="failure-val"><span class="retry-badge retry-badge-of">↩ retry of <code>${escHtml(shortId(retryOf))}</code></span></span>
+    </div>`;
+  }
+  if (retriedBy) {
+    html += `<div class="failure-row">
+      <span class="failure-key">Retried by</span>
+      <span class="failure-val"><span class="retry-badge retry-badge-by">↻ retried by <code>${escHtml(shortId(retriedBy))}</code></span></span>
+    </div>`;
+  }
 
   html += '</div>';
   return html;
 }
+window.buildFailureBlock = buildFailureBlock;
 
 // ── LLM-specific display block ────────────────────────────────────────────
 function buildLlmBlock(ev) {
@@ -450,18 +589,22 @@ const MOCK_DATA = {
   },
   partial: {
     trace_id: 'ddee1122-0000-0000-0000-aabbccddeeff',
+    failure_count: 1,
+    failure_event_ids: ['ev-102'],
     response: 'Partial response generated — one tool call failed but LLM recovered.',
     total_latency_ms: 891.2,
     status: 'partial',
     events: [
       { event_id: 'ev-101', event_type: 'llm_call',  status: 'success', latency_ms: 212.0, parent_id: null,     input_data: { prompt: 'Research AI debugging methods' }, output_data: { text: 'Planning search strategy…' }, agent_id: 'research-agent', timestamp: ts(0), metadata: { model: 'gemini-2.5-flash' } },
       { event_id: 'ev-102', event_type: 'tool_call', status: 'failure', latency_ms: 400.0, parent_id: 'ev-101', input_data: { tool: 'api_call', endpoint: '/external' }, output_data: { error: 'Connection timed out after 400 ms' }, agent_id: 'research-agent', timestamp: ts(1), metadata: { exception_type: 'TimeoutError', exception_message: 'Read timed out (connect=5, read=5)' } },
-      { event_id: 'ev-103', event_type: 'retry',     status: 'success', latency_ms: 180.0, parent_id: 'ev-102', input_data: { retry_count: 1 }, output_data: { status: 'success on retry' }, agent_id: 'research-agent', timestamp: ts(2), metadata: {} },
-      { event_id: 'ev-104', event_type: 'final_response', status: 'success', latency_ms: 99.2, parent_id: 'ev-103', input_data: {}, output_data: { answer: 'Partial answer retrieved after retry.' }, agent_id: 'research-agent', timestamp: ts(3), metadata: {} },
+      { event_id: 'ev-103', event_type: 'retry',     status: 'success', latency_ms: 180.0, parent_id: 'ev-102', input_data: { retry_count: 1 }, output_data: { status: 'success on retry' }, agent_id: 'research-agent', timestamp: ts(2), metadata: { retry_of: 'ev-102' } },
+      { event_id: 'ev-104', event_type: 'final_response', status: 'success', latency_ms: 99.2, parent_id: 'ev-103', input_data: {}, output_data: { answer: 'Partial answer retrieved after retry.' }, agent_id: 'research-agent', timestamp: ts(3), metadata: { retry_of: 'ev-102' } },
     ]
   },
   full_failure: {
     trace_id: 'fail9999-0000-0000-0000-000000000000',
+    failure_count: 2,
+    failure_event_ids: ['ev-201', 'ev-202'],
     response: '',
     total_latency_ms: 1203.5,
     status: 'failure',
