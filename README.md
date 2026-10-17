@@ -49,6 +49,15 @@ Run with coverage:
 pytest --cov=src/agentlens --cov-report=html
 ```
 
+The current suite contains **198 Python tests** (events, collector, storage,
+web API, failure capture, failure tracking, integration). The frontend also
+ships a zero-build JavaScript test harness:
+
+```bash
+# Open in a browser and read the summary at the top of the page
+xdg-open frontend/test.html        # 85 browser tests
+```
+
 ### Code Quality
 
 Format code:
@@ -96,11 +105,12 @@ See [docs/architecture.md](docs/architecture.md) for detailed design.
 |-------|-------|--------|
 | 1-5 | Events, SDK collector, storage, Gemini demos, tests | Complete |
 | 6 | FastAPI API and simple web dashboard | Complete |
-| 7 | Rich trace visualization and failure UX | Planned |
-| 8 | Persistent storage | Planned |
-| 9 | Adaptive observability | Planned |
-| 10 | Causal analysis and root-cause diagnosis | Planned |
-| 11 | Research benchmark and production deployment | Planned |
+| 7 | Live trace visualization (timeline, tree, filters) | Complete |
+| 8 | Failure tracking (capture, presentation, testing) | Complete |
+| 9 | Persistent storage | Planned |
+| 10 | Adaptive observability | Planned |
+| 11 | Causal analysis and root-cause diagnosis | Planned |
+| 12 | Final web application and deployment | Planned |
 
 ## Research Questions
 
@@ -180,8 +190,8 @@ If you use AgentLens in your research, please cite:
 
 ---
 
-**Status:** Phase 6 - Web API and Dashboard Integrated
-**Last Updated:** 2026-10-08
+**Status:** Phase 8 - Failure Tracking Complete
+**Last Updated:** 2026-10-17
 
 ---
 
@@ -434,4 +444,100 @@ Click the **"Live Mode"** toggle in the top-right header to switch to
 | Partial Failure   | Mixed green/amber badges, retry event         |
 | Full Failure      | Red trace status, error events, empty response|
 | Backend Error 500 | HTTP error banner, no results rendered        |
+
+---
+
+## Phase 8 — Failure Tracking
+
+Phase 8 makes agent failures first-class: every LLM/tool step is captured with
+its exception details, the failure is presented in the dashboard with its
+context (parent step, retry chain), and the behaviour is covered by scenario
+tests.
+
+### Automatic failure capture (backend)
+
+Three async context managers on `EventCollector`
+(`src/agentlens/sdk_collector/collector.py`) wrap each pipeline step. They time
+the step, record `SUCCESS` on clean exit, and on **any** exception record a
+`FAILURE` event **before re-raising**, so a failed run always leaves a
+persisted, identifiable record behind.
+
+| Wrapper | Records | Used for |
+|---|---|---|
+| `capture_step(event_type, …)` | Generic step | retrieval, memory write, final response |
+| `capture_llm_call(prompt, model, …)` | `LLM_CALL` with prompt + response | planning, synthesis |
+| `capture_tool_call(tool_name, …)` | `TOOL_CALL` with input + output | web search and other tools |
+
+```python
+async with collector.capture_llm_call(
+    prompt="Summarise the evidence",
+    model="gemini-2.5-flash",
+    metadata={"step": "synthesis"},
+) as result:
+    result[0] = await call_llm(prompt)   # response captured automatically
+```
+
+Every captured failure event carries this metadata:
+
+```json
+{
+  "step": "synthesis",
+  "exception_type": "TimeoutError",
+  "exception_message": "Gemini request timed out after 30s"
+}
+```
+
+**Retry linkage** — pass `retry_of=<failed_event_id>` and an incremented
+`attempt` when retrying a step; both are stored in the new event's metadata so
+the UI can render the retry chain:
+
+```python
+async with collector.capture_llm_call(
+    prompt=prompt, retry_of=failed_event_id, attempt=2,
+) as result:
+    result[0] = await call_llm(prompt)
+```
+
+### Failure presentation (frontend)
+
+When a trace contains failed events the dashboard:
+
+- Shows a **failure summary banner** above the timeline with the failed step,
+  the error message (`output_data.error` / `metadata.exception_message`) and
+  the exception type.
+- Defaults the **status filter to “Failure”** so the culprit is immediately
+  visible, with a one-click “Show full trace” return.
+- Renders a **parent breadcrumb** and **retry badges** (`↩ retry of`,
+  `↻ retried by`) inside each failed event's detail block.
+- Falls back to scanning event statuses when the API's `failure_event_ids`
+  field is absent.
+
+### Failure testing
+
+| Test file | Tests | Covers |
+|---|---|---|
+| `tests/test_failure_capture.py` | 18 | Wrapper success/failure paths, re-raise, retry metadata |
+| `tests/test_failure_tracking.py` | 26 | Timeout, invalid-input, tool-failure, retry and exact-identification scenarios |
+| `frontend/test.js` | +23 assertions | Failure banner, parent breadcrumb, retry badges, smart-filter default |
+
+The trace endpoint exposes the failure summary the UI consumes:
+
+```json
+{
+  "trace_id": "uuid",
+  "status": "failure",
+  "failure_count": 1,
+  "failure_event_ids": ["uuid-of-the-failed-event"]
+}
+```
+
+### Known limitation
+
+A live run that fails returns HTTP `502`; the persisted trace is stored
+server-side but its `trace_id` is not returned in that error response, so the
+UI shows a generic error banner rather than the failed timeline. Viewing a
+failed trace directly (via `GET /api/traces/{trace_id}`) or the **Full
+Failure** mock scenario demonstrates the full failure presentation. Returning
+the trace in the `502` payload is a candidate follow-up for Phase 9.
+
 
