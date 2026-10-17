@@ -18,15 +18,23 @@ Design Principles
 4. **Decorator ergonomics** — ``@collector.traced(agent_id="…")`` works on
    both ``async def`` and regular ``def`` functions without the caller having
    to choose a different decorator.
+
+5. **Automatic failure capture** — ``capture_step()``, ``capture_llm_call()``,
+   and ``capture_tool_call()`` are async context managers that time each step,
+   record ``SUCCESS`` on clean exit, and record a ``FAILURE`` event (carrying
+   ``exception_type`` + ``exception_message``) before re-raising on error.
+   Retry linkage is supported via ``retry_of`` / ``attempt`` metadata.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import inspect
+import time
 import warnings
-from typing import Any, Callable, Optional
+from typing import Any, AsyncIterator, Callable, Optional
 from uuid import UUID, uuid4
 
 from agentlens.events import AgentEvent, EventStatus, EventType, create_event
@@ -321,3 +329,240 @@ class EventCollector:
                 await collector.record_event(...)
         """
         return _TracedContext(collector=self, agent_id=agent_id)
+
+    # ------------------------------------------------------------------
+    # Automatic failure-capture context managers
+    # ------------------------------------------------------------------
+
+    @contextlib.asynccontextmanager
+    async def capture_step(
+        self,
+        event_type: EventType | str,
+        input_data: Optional[dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        *,
+        retry_of: Optional[UUID] = None,
+        attempt: int = 1,
+    ) -> AsyncIterator[None]:
+        """
+        Generic async context manager that captures a single pipeline step.
+
+        Times execution of the body.  On clean exit it records a ``SUCCESS``
+        event; on any exception it records a ``FAILURE`` event that carries
+        ``exception_type`` and ``exception_message`` in *metadata*, then
+        **re-raises** the original exception (traceback preserved).
+
+        Retry linkage: if this attempt is a retry of a previous failed event,
+        pass ``retry_of=<failed_event_id>`` and an incremented ``attempt``
+        counter; both are stored in the event's metadata.
+
+        Args:
+            event_type: The :class:`~agentlens.events.EventType` for this step.
+            input_data: Inputs to the step (recorded on both success and failure).
+            metadata: Additional context merged into the recorded event's metadata.
+            retry_of: UUID of the failed event this attempt is retrying.
+            attempt: Attempt counter (1 = first try, 2 = first retry, …).
+
+        Yields:
+            Nothing — the body runs inside the ``async with`` block.
+
+        Raises:
+            Any exception raised inside the body (re-raised after recording).
+
+        Example::
+
+            async with collector.capture_step(
+                EventType.LLM_CALL,
+                input_data={"prompt": "..."},
+                metadata={"step": "synthesis"},
+            ):
+                result = await call_llm(prompt)
+        """
+        _start = time.perf_counter()
+        _base_meta: dict[str, Any] = dict(metadata or {})
+        if retry_of is not None:
+            _base_meta["retry_of"] = str(retry_of)
+        if attempt > 1 or retry_of is not None:
+            _base_meta["attempt"] = attempt
+
+        try:
+            yield
+        except Exception as exc:
+            _latency = (time.perf_counter() - _start) * 1000
+            _fail_meta = {
+                **_base_meta,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            }
+            await self.record_event(
+                event_type=event_type,
+                status=EventStatus.FAILURE,
+                input_data=input_data,
+                output_data=None,
+                latency_ms=_latency,
+                metadata=_fail_meta,
+            )
+            raise
+        else:
+            _latency = (time.perf_counter() - _start) * 1000
+            await self.record_event(
+                event_type=event_type,
+                status=EventStatus.SUCCESS,
+                input_data=input_data,
+                latency_ms=_latency,
+                metadata=_base_meta if _base_meta else None,
+            )
+
+    @contextlib.asynccontextmanager
+    async def capture_llm_call(
+        self,
+        prompt: str,
+        model: str = "gemini-2.0-flash",
+        metadata: Optional[dict[str, Any]] = None,
+        *,
+        retry_of: Optional[UUID] = None,
+        attempt: int = 1,
+    ) -> AsyncIterator[list[str]]:
+        """
+        Async context manager for an LLM call step.
+
+        Yields a **result list** (a single-element mutable list) that the body
+        should populate with the model response string so it can be recorded.
+        Times execution, records ``SUCCESS`` (with prompt + response) on exit,
+        or ``FAILURE`` (with exception details) if an exception escapes.
+
+        Args:
+            prompt: The input prompt sent to the model.
+            model: Model identifier (default ``"gemini-2.0-flash"``).
+            metadata: Extra metadata merged into the recorded event.
+            retry_of: UUID of the failed event this call is retrying.
+            attempt: Attempt counter.
+
+        Yields:
+            A ``list[str]`` with one empty-string element.  Assign the
+            response to ``result[0]`` inside the ``async with`` body.
+
+        Raises:
+            Any exception raised inside the body (re-raised after recording).
+
+        Example::
+
+            async with collector.capture_llm_call(
+                prompt="What is X?", model="gemini-2.5-flash"
+            ) as result:
+                result[0] = await call_llm(prompt)
+            answer = result[0]
+        """
+        _start = time.perf_counter()
+        result: list[str] = [""]
+        _base_meta: dict[str, Any] = {"model": model, **(metadata or {})}
+        if retry_of is not None:
+            _base_meta["retry_of"] = str(retry_of)
+        if attempt > 1 or retry_of is not None:
+            _base_meta["attempt"] = attempt
+
+        try:
+            yield result
+        except Exception as exc:
+            _latency = (time.perf_counter() - _start) * 1000
+            _fail_meta = {
+                **_base_meta,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            }
+            await self.record_event(
+                event_type=EventType.LLM_CALL,
+                status=EventStatus.FAILURE,
+                input_data={"prompt": prompt, "model": model},
+                output_data=None,
+                latency_ms=_latency,
+                metadata=_fail_meta,
+            )
+            raise
+        else:
+            _latency = (time.perf_counter() - _start) * 1000
+            await self.record_event(
+                event_type=EventType.LLM_CALL,
+                status=EventStatus.SUCCESS,
+                input_data={"prompt": prompt, "model": model},
+                output_data={"response": result[0]},
+                latency_ms=_latency,
+                metadata=_base_meta,
+            )
+
+    @contextlib.asynccontextmanager
+    async def capture_tool_call(
+        self,
+        tool_name: str,
+        input_data: Optional[dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        *,
+        retry_of: Optional[UUID] = None,
+        attempt: int = 1,
+    ) -> AsyncIterator[list[Any]]:
+        """
+        Async context manager for a tool-call step.
+
+        Yields a **result list** (a single-element mutable list) that the body
+        should populate with the tool's output dict so it can be recorded.
+        Times execution, records ``SUCCESS`` (with input + output) on exit,
+        or ``FAILURE`` (with exception details) if an exception escapes.
+
+        Args:
+            tool_name: Human-readable tool name stored in metadata.
+            input_data: Tool inputs.
+            metadata: Extra metadata merged into the recorded event.
+            retry_of: UUID of the failed event this call is retrying.
+            attempt: Attempt counter.
+
+        Yields:
+            A ``list`` with one ``None`` element.  Assign the output dict
+            to ``result[0]`` inside the ``async with`` body.
+
+        Raises:
+            Any exception raised inside the body (re-raised after recording).
+
+        Example::
+
+            async with collector.capture_tool_call(
+                "web_search", input_data={"query": q}
+            ) as result:
+                result[0] = await web_search(q)
+            hits = result[0]
+        """
+        _start = time.perf_counter()
+        result: list[Any] = [None]
+        _base_meta: dict[str, Any] = {"tool": tool_name, **(metadata or {})}
+        if retry_of is not None:
+            _base_meta["retry_of"] = str(retry_of)
+        if attempt > 1 or retry_of is not None:
+            _base_meta["attempt"] = attempt
+
+        try:
+            yield result
+        except Exception as exc:
+            _latency = (time.perf_counter() - _start) * 1000
+            _fail_meta = {
+                **_base_meta,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            }
+            await self.record_event(
+                event_type=EventType.TOOL_CALL,
+                status=EventStatus.FAILURE,
+                input_data=input_data,
+                output_data=None,
+                latency_ms=_latency,
+                metadata=_fail_meta,
+            )
+            raise
+        else:
+            _latency = (time.perf_counter() - _start) * 1000
+            await self.record_event(
+                event_type=EventType.TOOL_CALL,
+                status=EventStatus.SUCCESS,
+                input_data=input_data,
+                output_data=result[0] if isinstance(result[0], dict) else {"output": result[0]},
+                latency_ms=_latency,
+                metadata=_base_meta,
+            )
