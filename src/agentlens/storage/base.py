@@ -40,6 +40,7 @@ Usage example::
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
@@ -280,5 +281,56 @@ class TraceStore(ABC):
         Returns:
             List of :class:`~agentlens.events.Trace` objects ordered by
             ``start_time`` descending (most recent first).
+        """
+        ...
+
+    @abstractmethod
+    async def list_trace_page(
+        self,
+        *,
+        limit: int = 20,
+        agent_id: Optional[str] = None,
+        status: Optional[EventStatus] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        cursor: Optional[str] = None,
+    ) -> tuple[list[Trace], Optional[str]]:
+        """
+        Return a single page of traces using keyset (cursor) pagination.
+
+        Args:
+            limit:      Page size.
+            agent_id:   Optional agent filter.
+            status:     Optional status filter.
+            start_date: Minimum ``start_time`` (inclusive).
+            end_date:   Maximum ``start_time`` (inclusive).
+            cursor:     Opaque continuation token from a previous call.
+
+        Returns:
+            ``(traces, next_cursor)`` — ``next_cursor`` is ``None`` when
+            there are no more results.
+        """
+        ...
+
+    @abstractmethod
+    async def count_traces(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+        status: Optional[EventStatus] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> int:
+        """
+        Return the total count of traces matching the given filters.
+
+        Args:
+            agent_id:   Optional agent filter.
+            status:     Optional status filter.
+            start_date: Minimum ``start_time`` (inclusive).
+            end_date:   Maximum ``start_time`` (inclusive).
+
+        Returns:
+            Integer count.
         """
         ...

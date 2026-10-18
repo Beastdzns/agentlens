@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>AgentLens — What We Built</title>
+<title>AgentLens — Project Flow & Architecture</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <style>
   :root {
@@ -19,18 +19,18 @@
     --red: #fc8181;
     --orange: #f6ad55;
     --yellow: #f6e05e;
+    --blue: #4299e1;
     --text: #e2e8f0;
     --text-muted: #718096;
     --text-dim: #4a5568;
-    --card: rgba(13,20,40,0.8);
-    --glass: rgba(255,255,255,0.03);
-    --glow-teal: 0 0 30px rgba(56,178,172,0.3);
-    --glow-green: 0 0 20px rgba(72,187,120,0.4);
-    --glow-red: 0 0 20px rgba(252,129,129,0.4);
+    --card: rgba(13,20,40,0.85);
+    --glow-teal: 0 0 30px rgba(56,178,172,0.25);
+    --glow-green: 0 0 20px rgba(72,187,120,0.35);
+    --glow-purple: 0 0 20px rgba(159,122,234,0.3);
+    --glow-orange: 0 0 20px rgba(246,173,85,0.3);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
-
   body {
     background: var(--bg);
     color: var(--text);
@@ -39,370 +39,221 @@
     line-height: 1.6;
   }
 
-  /* ── Starfield background ── */
+  /* ── Stars ── */
   #stars { position: fixed; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
-  .star { position: absolute; background: white; border-radius: 50%; animation: twinkle var(--d, 3s) ease-in-out infinite; opacity: 0; }
-  @keyframes twinkle { 0%,100%{opacity:0} 50%{opacity:var(--o,0.6)} }
+  .star { position: absolute; background: white; border-radius: 50%; animation: twinkle var(--d,3s) ease-in-out infinite; opacity: 0; }
+  @keyframes twinkle { 0%,100%{opacity:0} 50%{opacity:var(--o,0.5)} }
 
   /* ── Layout ── */
-  .page { position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+  .page { position: relative; z-index: 1; max-width: 1280px; margin: 0 auto; padding: 0 28px; }
 
   /* ── Navbar ── */
   nav {
     position: sticky; top: 0; z-index: 100;
     backdrop-filter: blur(20px);
-    background: rgba(6,11,24,0.85);
+    background: rgba(6,11,24,0.9);
     border-bottom: 1px solid var(--border);
-    padding: 0 24px;
+    padding: 0 28px;
   }
-  .nav-inner {
-    max-width: 1200px; margin: 0 auto;
-    display: flex; align-items: center; justify-content: space-between;
-    height: 60px;
-  }
+  .nav-inner { max-width: 1280px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; height: 60px; }
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.1rem; }
-  .logo-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 10px var(--teal); animation: pulse 2s ease-in-out infinite; }
-  @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.3)} }
-  .nav-links { display: flex; gap: 24px; }
-  .nav-links a { color: var(--text-muted); font-size: 0.875rem; text-decoration: none; transition: color 0.2s; }
+  .logo-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 10px var(--teal); animation: pulse-dot 2s ease-in-out infinite; }
+  @keyframes pulse-dot { 0%,100%{transform:scale(1)} 50%{transform:scale(1.4)} }
+  .nav-links { display: flex; gap: 20px; flex-wrap: wrap; }
+  .nav-links a { color: var(--text-muted); font-size: 0.82rem; text-decoration: none; transition: color .2s; }
   .nav-links a:hover { color: var(--cyan); }
 
   /* ── Hero ── */
-  .hero {
-    padding: 100px 0 60px;
-    text-align: center;
-    position: relative;
-  }
+  .hero { padding: 90px 0 50px; text-align: center; }
   .hero-badge {
     display: inline-flex; align-items: center; gap: 8px;
     background: rgba(56,178,172,0.1); border: 1px solid rgba(56,178,172,0.3);
-    border-radius: 999px; padding: 6px 16px;
-    font-size: 0.75rem; font-weight: 600; color: var(--teal);
-    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 24px;
+    border-radius: 999px; padding: 6px 18px;
+    font-size: 0.72rem; font-weight: 700; color: var(--teal);
+    letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 24px;
   }
   .hero h1 {
-    font-size: clamp(2.5rem, 6vw, 4.5rem);
-    font-weight: 800;
-    line-height: 1.1;
+    font-size: clamp(2.8rem,6vw,5rem); font-weight: 800; line-height: 1.05;
     background: linear-gradient(135deg, #fff 0%, var(--cyan) 50%, var(--teal) 100%);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    margin-bottom: 20px;
+    margin-bottom: 18px;
   }
-  .hero p {
-    font-size: 1.15rem; color: var(--text-muted);
-    max-width: 620px; margin: 0 auto 40px;
-  }
+  .hero-sub { font-size: 1.1rem; color: var(--text-muted); max-width: 640px; margin: 0 auto 36px; }
   .hero-tags { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
-  .tag {
-    padding: 6px 14px; border-radius: 6px; font-size: 0.8rem; font-weight: 500;
-    font-family: 'JetBrains Mono', monospace;
-  }
-  .tag-teal { background: rgba(56,178,172,0.12); border: 1px solid rgba(56,178,172,0.3); color: var(--teal); }
+  .tag { padding: 5px 13px; border-radius: 6px; font-size: 0.78rem; font-weight: 500; font-family: 'JetBrains Mono', monospace; }
+  .tag-teal   { background: rgba(56,178,172,0.12);  border: 1px solid rgba(56,178,172,0.3);  color: var(--teal); }
   .tag-purple { background: rgba(159,122,234,0.12); border: 1px solid rgba(159,122,234,0.3); color: var(--purple); }
-  .tag-orange { background: rgba(246,173,85,0.12); border: 1px solid rgba(246,173,85,0.3); color: var(--orange); }
-  .tag-green { background: rgba(72,187,120,0.12); border: 1px solid rgba(72,187,120,0.3); color: var(--green); }
-  .tag-cyan { background: rgba(99,179,237,0.12); border: 1px solid rgba(99,179,237,0.3); color: var(--cyan); }
+  .tag-orange { background: rgba(246,173,85,0.12);  border: 1px solid rgba(246,173,85,0.3);  color: var(--orange); }
+  .tag-green  { background: rgba(72,187,120,0.12);  border: 1px solid rgba(72,187,120,0.3);  color: var(--green); }
+  .tag-cyan   { background: rgba(99,179,237,0.12);  border: 1px solid rgba(99,179,237,0.3);  color: var(--cyan); }
+  .tag-red    { background: rgba(252,129,129,0.12); border: 1px solid rgba(252,129,129,0.3); color: var(--red); }
+  .tag-blue   { background: rgba(66,153,225,0.12);  border: 1px solid rgba(66,153,225,0.3);  color: var(--blue); }
 
-  /* ── Section titles ── */
-  .section { padding: 80px 0; }
-  .section-label {
-    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.15em;
-    text-transform: uppercase; color: var(--teal); margin-bottom: 12px;
-  }
+  /* ── Sections ── */
+  .section { padding: 70px 0; }
+  .section-label { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--teal); margin-bottom: 10px; }
   .section-title {
-    font-size: clamp(1.6rem, 3.5vw, 2.4rem);
-    font-weight: 700; margin-bottom: 12px;
+    font-size: clamp(1.7rem,3.5vw,2.6rem); font-weight: 700; margin-bottom: 10px;
     background: linear-gradient(135deg, #fff, var(--cyan));
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   }
-  .section-desc { color: var(--text-muted); max-width: 560px; margin-bottom: 48px; }
+  .section-desc { color: var(--text-muted); max-width: 580px; margin-bottom: 44px; font-size: 0.95rem; }
 
   /* ── Card ── */
-  .card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    backdrop-filter: blur(10px);
-    transition: border-color 0.3s, box-shadow 0.3s;
-  }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; backdrop-filter: blur(10px); transition: border-color .3s, box-shadow .3s; }
   .card:hover { border-color: var(--border-bright); box-shadow: var(--glow-teal); }
 
-  /* ── What is AgentLens ── */
-  .what-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; }
-  .what-card { padding: 28px; }
-  .what-icon { font-size: 2rem; margin-bottom: 14px; }
-  .what-card h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 8px; }
-  .what-card p { font-size: 0.875rem; color: var(--text-muted); line-height: 1.65; }
+  /* ── Progress bar for phases ── */
+  .phase-grid { display: flex; flex-direction: column; gap: 16px; }
+  .phase-item {
+    display: grid;
+    grid-template-columns: 48px 1fr auto;
+    align-items: center; gap: 18px;
+    padding: 18px 22px; border-radius: 12px;
+    background: rgba(13,20,40,0.7); border: 1px solid var(--border);
+    transition: border-color .25s;
+  }
+  .phase-item:hover { border-color: var(--border-bright); }
+  .phase-num { font-size: 1.3rem; font-weight: 800; font-family: 'JetBrains Mono'; color: var(--text-dim); }
+  .phase-info h4 { font-size: 0.95rem; font-weight: 600; margin-bottom: 3px; }
+  .phase-info p { font-size: 0.8rem; color: var(--text-muted); }
+  .phase-files { font-family: 'JetBrains Mono'; font-size: 0.72rem; color: var(--text-dim); margin-top: 5px; }
+  .phase-status {
+    padding: 4px 12px; border-radius: 999px;
+    font-size: 0.68rem; font-weight: 700; white-space: nowrap; text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .ps-done    { background: rgba(72,187,120,0.15);  color: var(--green);  border: 1px solid rgba(72,187,120,0.3); }
+  .ps-active  { background: rgba(99,179,237,0.15);  color: var(--cyan);   border: 1px solid rgba(99,179,237,0.3); animation: blink-border 2s ease-in-out infinite; }
+  .ps-next    { background: rgba(159,122,234,0.12); color: var(--purple); border: 1px solid rgba(159,122,234,0.25); }
+  @keyframes blink-border { 0%,100%{border-color:rgba(99,179,237,0.3)} 50%{border-color:rgba(99,179,237,0.7)} }
 
-  /* ── Architecture overview ── */
-  .arch-box {
-    padding: 36px;
-    background: linear-gradient(135deg, rgba(13,20,40,0.9), rgba(17,26,53,0.9));
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    margin-bottom: 32px;
+  /* ── Architecture layers ── */
+  .arch-stack { display: flex; flex-direction: column; gap: 0; }
+  .arch-layer-big {
+    display: grid; grid-template-columns: 56px 1fr;
+    align-items: stretch; border: 1px solid var(--border);
+    background: rgba(13,20,40,0.75); transition: border-color .25s;
   }
-  .arch-layers { display: flex; flex-direction: column; gap: 12px; }
-  .arch-layer {
-    display: flex; align-items: center; gap: 14px;
-    padding: 14px 20px; border-radius: 10px;
-    border-left: 3px solid;
-    font-size: 0.9rem;
-  }
-  .arch-layer .layer-icon { font-size: 1.4rem; }
-  .arch-layer .layer-name { font-weight: 600; min-width: 160px; }
-  .arch-layer .layer-desc { color: var(--text-muted); font-size: 0.825rem; }
-  .layer-ai { background: rgba(159,122,234,0.08); border-color: var(--purple); }
-  .layer-sdk { background: rgba(56,178,172,0.08); border-color: var(--teal); }
-  .layer-api { background: rgba(99,179,237,0.08); border-color: var(--cyan); }
-  .layer-storage { background: rgba(246,173,85,0.08); border-color: var(--orange); }
-  .layer-frontend { background: rgba(72,187,120,0.08); border-color: var(--green); }
+  .arch-layer-big:first-child { border-radius: 14px 14px 0 0; }
+  .arch-layer-big:last-child  { border-radius: 0 0 14px 14px; }
+  .arch-layer-big:not(:first-child) { border-top: none; }
+  .arch-layer-big:hover { border-color: var(--border-bright); z-index: 1; }
 
-  .arch-arrow { text-align: center; font-size: 1.2rem; color: var(--text-dim); }
+  .layer-stripe { display: flex; align-items: center; justify-content: center; font-size: 1.6rem; padding: 20px 0; border-right: 1px solid var(--border); }
+  .layer-body { padding: 20px 24px; }
+  .layer-body h3 { font-size: 0.95rem; font-weight: 700; margin-bottom: 4px; }
+  .layer-body .lb-desc { font-size: 0.82rem; color: var(--text-muted); margin-bottom: 10px; }
+  .layer-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pill {
+    font-family: 'JetBrains Mono'; font-size: 0.68rem; padding: 3px 9px;
+    border-radius: 5px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+    color: var(--text-muted);
+  }
+  .pill-teal   { background: rgba(56,178,172,0.1);  border-color: rgba(56,178,172,0.3);  color: var(--teal); }
+  .pill-purple { background: rgba(159,122,234,0.1); border-color: rgba(159,122,234,0.3); color: var(--purple); }
+  .pill-orange { background: rgba(246,173,85,0.1);  border-color: rgba(246,173,85,0.3);  color: var(--orange); }
+  .pill-green  { background: rgba(72,187,120,0.1);  border-color: rgba(72,187,120,0.3);  color: var(--green); }
+  .pill-cyan   { background: rgba(99,179,237,0.1);  border-color: rgba(99,179,237,0.3);  color: var(--cyan); }
+  .pill-red    { background: rgba(252,129,129,0.1); border-color: rgba(252,129,129,0.3); color: var(--red); }
+  .pill-blue   { background: rgba(66,153,225,0.1);  border-color: rgba(66,153,225,0.3);  color: var(--blue); }
 
-  /* ── Pipeline flow ── */
-  .pipeline-flow {
-    display: flex; flex-wrap: wrap;
-    align-items: stretch; gap: 0;
-    margin: 0 0 40px;
-    position: relative;
-  }
-  .pipeline-step-wrap {
-    display: flex; align-items: center;
-    flex: 1; min-width: 140px;
-  }
-  .pipeline-step {
-    flex: 1;
-    padding: 20px 14px;
-    border-radius: 12px;
-    border: 1.5px solid;
-    cursor: pointer;
-    transition: all 0.3s;
-    position: relative;
-    text-align: center;
-  }
-  .pipeline-step .step-num {
-    font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em;
-    text-transform: uppercase; margin-bottom: 6px;
-  }
-  .pipeline-step .step-name { font-size: 0.85rem; font-weight: 600; margin-bottom: 4px; }
-  .pipeline-step .step-type {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.65rem; opacity: 0.7;
-  }
-  .pipeline-step .step-badge {
-    position: absolute; top: -10px; left: 50%; transform: translateX(-50%);
-    padding: 2px 8px; border-radius: 999px;
-    font-size: 0.6rem; font-weight: 700; white-space: nowrap;
-  }
+  .ls-ai     { background: rgba(159,122,234,0.06); }
+  .ls-sdk    { background: rgba(56,178,172,0.06); }
+  .ls-api    { background: rgba(99,179,237,0.06); }
+  .ls-storage{ background: rgba(246,173,85,0.06); }
+  .ls-db     { background: rgba(72,187,120,0.06); }
+  .ls-ui     { background: rgba(66,153,225,0.06); }
 
-  /* Step colors */
-  .step-planning { border-color: var(--purple); background: rgba(159,122,234,0.08); }
-  .step-planning .step-num, .step-planning .step-name { color: var(--purple); }
-  .step-search { border-color: var(--cyan); background: rgba(99,179,237,0.08); }
-  .step-search .step-num, .step-search .step-name { color: var(--cyan); }
-  .step-retrieval { border-color: var(--teal); background: rgba(56,178,172,0.08); }
-  .step-retrieval .step-num, .step-retrieval .step-name { color: var(--teal); }
-  .step-memory { border-color: var(--orange); background: rgba(246,173,85,0.08); }
-  .step-memory .step-num, .step-memory .step-name { color: var(--orange); }
-  .step-synthesis { border-color: var(--green); background: rgba(72,187,120,0.08); }
-  .step-synthesis .step-num, .step-synthesis .step-name { color: var(--green); }
-  .step-final { border-color: var(--yellow); background: rgba(246,224,94,0.08); }
-  .step-final .step-num, .step-final .step-name { color: var(--yellow); }
+  .arch-down-arrow { text-align: center; font-size: 1rem; color: var(--text-dim); padding: 4px 0; }
 
-  .pipeline-arrow {
-    color: var(--text-dim); font-size: 1.1rem;
-    padding: 0 4px; flex-shrink: 0;
+  /* ── Data Flow diagram ── */
+  .flow-diagram { display: flex; flex-direction: column; gap: 0; }
+  .flow-step {
+    display: flex; align-items: flex-start; gap: 18px;
+    padding: 20px 24px; border: 1px solid var(--border);
+    background: rgba(13,20,40,0.7); transition: border-color .25s, box-shadow .25s;
+    cursor: default;
   }
+  .flow-step:first-child { border-radius: 14px 14px 0 0; }
+  .flow-step:last-child  { border-radius: 0 0 14px 14px; }
+  .flow-step:not(:first-child) { border-top: none; }
+  .flow-step:hover { border-color: var(--border-bright); box-shadow: var(--glow-teal); z-index: 1; }
+  .flow-step-icon { font-size: 1.8rem; flex-shrink: 0; margin-top: 2px; }
+  .flow-step-content h4 { font-size: 0.92rem; font-weight: 700; margin-bottom: 4px; }
+  .flow-step-content p  { font-size: 0.82rem; color: var(--text-muted); margin-bottom: 8px; }
+  .flow-step-code {
+    font-family: 'JetBrains Mono'; font-size: 0.73rem;
+    background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 6px; padding: 8px 12px; color: var(--text-muted);
+  }
+  .flow-step-code .kw  { color: #c792ea; }
+  .flow-step-code .fn  { color: #82aaff; }
+  .flow-step-code .str { color: #c3e88d; }
+  .flow-step-code .cm  { color: #546e7a; font-style: italic; }
+  .step-arrow { text-align: center; font-size: 1.1rem; color: var(--text-dim); padding: 4px 0; border-left: 1px dashed rgba(99,179,237,0.15); margin-left: 35px; }
 
-  /* States */
-  .step-success { border-color: var(--green) !important; background: rgba(72,187,120,0.12) !important; box-shadow: var(--glow-green); }
-  .step-failure { border-color: var(--red) !important; background: rgba(252,129,129,0.12) !important; box-shadow: var(--glow-red) !important; animation: shake 0.4s ease; }
-  .step-running { animation: stepPulse 1s ease-in-out infinite; }
-  @keyframes shake { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-4px)} 40%,80%{transform:translateX(4px)} }
-  @keyframes stepPulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
-
-  .badge-success { background: rgba(72,187,120,0.2); color: var(--green); border: 1px solid var(--green); }
-  .badge-failure { background: rgba(252,129,129,0.2); color: var(--red); border: 1px solid var(--red); }
-  .badge-running { background: rgba(99,179,237,0.2); color: var(--cyan); border: 1px solid var(--cyan); }
-
-  /* ── Trace viewer ── */
-  .trace-panel {
-    padding: 24px;
-    border-radius: 16px;
-    background: rgba(6,11,24,0.95);
-    border: 1px solid var(--border);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.8rem;
-    min-height: 220px;
-    position: relative;
-    overflow: hidden;
-  }
-  .trace-panel h4 { font-family: 'Inter', sans-serif; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); margin-bottom: 16px; }
-  .trace-event {
-    display: flex; align-items: flex-start; gap: 10px;
-    padding: 8px 10px; border-radius: 6px; margin-bottom: 6px;
-    border-left: 3px solid;
-    animation: eventSlide 0.3s ease;
-  }
-  @keyframes eventSlide { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
-  .trace-event.ev-success { border-color: var(--green); background: rgba(72,187,120,0.05); }
-  .trace-event.ev-failure { border-color: var(--red); background: rgba(252,129,129,0.07); }
-  .trace-event.ev-running { border-color: var(--cyan); background: rgba(99,179,237,0.05); }
-  .ev-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
-  .ev-dot-s { background: var(--green); box-shadow: 0 0 6px var(--green); }
-  .ev-dot-f { background: var(--red); box-shadow: 0 0 6px var(--red); }
-  .ev-dot-r { background: var(--cyan); animation: pulse 1s infinite; }
-  .ev-type { color: var(--cyan); font-weight: 500; }
-  .ev-status-s { color: var(--green); }
-  .ev-status-f { color: var(--red); }
-  .ev-meta { color: var(--text-muted); margin-top: 2px; font-size: 0.73rem; }
-  .ev-error { color: var(--red); margin-top: 2px; font-size: 0.73rem; }
-
-  .trace-placeholder {
-    position: absolute; inset: 0;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    color: var(--text-dim);
-    font-family: 'Inter', sans-serif;
-    font-size: 0.875rem;
-    gap: 8px;
-    pointer-events: none;
-    transition: opacity 0.3s;
-  }
-  .trace-placeholder .ph-icon { font-size: 2.5rem; }
-
-  .sim-controls {
-    display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; align-items: center;
-  }
-  .btn {
-    padding: 8px 18px; border-radius: 8px; border: none;
-    font-family: 'Inter', sans-serif; font-size: 0.85rem; font-weight: 600;
-    cursor: pointer; transition: all 0.2s;
-    display: inline-flex; align-items: center; gap: 6px;
-  }
-  .btn-primary { background: var(--teal); color: #000; }
-  .btn-primary:hover { background: #44d5cf; transform: translateY(-1px); box-shadow: 0 4px 14px rgba(56,178,172,0.4); }
-  .btn-danger { background: rgba(252,129,129,0.15); border: 1px solid var(--red); color: var(--red); }
-  .btn-danger:hover { background: rgba(252,129,129,0.25); }
-  .btn-ghost { background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--text-muted); }
-  .btn-ghost:hover { background: rgba(255,255,255,0.1); color: var(--text); }
-  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
-
-  .sim-label { font-size: 0.8rem; color: var(--text-muted); }
-
-  /* ── SDK wrappers ── */
-  .wrappers-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-  .wrapper-card { padding: 28px; }
-  .wrapper-card h3 {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 1rem; font-weight: 600; margin-bottom: 8px;
-  }
-  .wrapper-card .wr-desc { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px; }
-  .flow-row {
-    display: flex; align-items: center; gap: 8px;
-    padding: 10px 14px; border-radius: 8px;
-    font-size: 0.8rem; margin-bottom: 8px;
-  }
-  .flow-row .flow-icon { font-size: 1rem; flex-shrink: 0; }
-  .flow-row .flow-text { flex: 1; }
-  .flow-enter { background: rgba(99,179,237,0.07); border: 1px solid rgba(99,179,237,0.2); }
-  .flow-work { background: rgba(159,122,234,0.07); border: 1px solid rgba(159,122,234,0.2); }
-  .flow-success { background: rgba(72,187,120,0.07); border: 1px solid rgba(72,187,120,0.2); }
-  .flow-failure { background: rgba(252,129,129,0.07); border: 1px solid rgba(252,129,129,0.2); }
-  .flow-arrow-down { text-align: center; color: var(--text-dim); font-size: 0.9rem; margin: 2px 0; }
-
-  .code-block {
-    background: rgba(0,0,0,0.5);
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 8px;
-    padding: 14px 16px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.75rem;
-    line-height: 1.7;
-    margin-top: 16px;
-    overflow-x: auto;
-  }
-  .code-block .kw { color: #c792ea; }
-  .code-block .fn { color: #82aaff; }
-  .code-block .str { color: #c3e88d; }
-  .code-block .cm { color: #546e7a; font-style: italic; }
-  .code-block .val { color: #f78c6c; }
-
-  /* ── Retry linkage ── */
-  .retry-diagram {
-    padding: 32px;
-    border-radius: 16px;
-    background: rgba(13,20,40,0.8);
-    border: 1px solid var(--border);
-  }
-  .retry-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-  .retry-attempt {
-    flex: 1; padding: 14px 18px; border-radius: 10px;
-    font-size: 0.85rem;
-  }
-  .retry-attempt .att-num { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 4px; }
-  .retry-attempt .att-name { font-weight: 600; margin-bottom: 4px; }
-  .retry-attempt .att-meta { font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: var(--text-muted); }
-  .att-fail { background: rgba(252,129,129,0.08); border: 1px solid rgba(252,129,129,0.3); }
-  .att-fail .att-num { color: var(--red); }
-  .att-retry { background: rgba(246,173,85,0.08); border: 1px solid rgba(246,173,85,0.3); }
-  .att-retry .att-num { color: var(--orange); }
-  .att-success { background: rgba(72,187,120,0.08); border: 1px solid rgba(72,187,120,0.3); }
-  .att-success .att-num { color: var(--green); }
-  .retry-link-arrow { font-size: 1.5rem; color: var(--orange); flex-shrink: 0; }
-
-  /* ── Acceptance criteria ── */
-  .criteria-list { list-style: none; display: flex; flex-direction: column; gap: 12px; }
-  .criteria-item {
-    display: flex; align-items: flex-start; gap: 14px;
-    padding: 16px 20px; border-radius: 10px;
-    background: rgba(13,20,40,0.6); border: 1px solid var(--border);
-  }
-  .criteria-check { font-size: 1.2rem; flex-shrink: 0; margin-top: 1px; }
-  .criteria-item h4 { font-size: 0.9rem; font-weight: 600; margin-bottom: 4px; }
-  .criteria-item p { font-size: 0.825rem; color: var(--text-muted); }
+  /* ── DB layer detail ── */
+  .db-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+  .db-card { padding: 24px; }
+  .db-card h3 { font-size: 0.92rem; font-weight: 700; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+  .db-card p  { font-size: 0.82rem; color: var(--text-muted); line-height: 1.65; margin-bottom: 12px; }
+  .kv-list { display: flex; flex-direction: column; gap: 5px; }
+  .kv-row { display: flex; align-items: baseline; gap: 8px; font-size: 0.78rem; }
+  .kv-key { font-family: 'JetBrains Mono'; color: var(--cyan); min-width: 110px; flex-shrink: 0; }
+  .kv-val { color: var(--text-muted); }
 
   /* ── File tree ── */
   .file-tree {
-    background: rgba(0,0,0,0.5);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 20px 24px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.82rem;
-    line-height: 2;
+    background: rgba(0,0,0,0.5); border: 1px solid var(--border);
+    border-radius: 12px; padding: 22px 26px;
+    font-family: 'JetBrains Mono'; font-size: 0.8rem; line-height: 2.1;
   }
-  .ft-dir { color: var(--cyan); font-weight: 500; }
+  .ft-dir  { color: var(--cyan); font-weight: 600; }
   .ft-file { color: var(--text); }
-  .ft-new { color: var(--green); font-weight: 600; }
-  .ft-modified { color: var(--orange); font-weight: 600; }
-  .ft-tag { font-size: 0.65rem; padding: 1px 6px; border-radius: 4px; margin-left: 8px; vertical-align: middle; font-family: 'Inter', monospace; }
+  .ft-new  { color: var(--green); font-weight: 600; }
+  .ft-mod  { color: var(--orange); font-weight: 600; }
+  .ft-tag  { font-size: 0.62rem; padding: 1px 7px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }
   .ft-tag-new { background: rgba(72,187,120,0.2); color: var(--green); border: 1px solid rgba(72,187,120,0.3); }
   .ft-tag-mod { background: rgba(246,173,85,0.2); color: var(--orange); border: 1px solid rgba(246,173,85,0.3); }
 
+  /* ── Env table ── */
+  .env-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+  .env-table th { text-align: left; padding: 10px 14px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); border-bottom: 1px solid var(--border); }
+  .env-table td { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: top; }
+  .env-table tr:last-child td { border-bottom: none; }
+  .env-table td:first-child { font-family: 'JetBrains Mono'; color: var(--cyan); font-size: 0.8rem; white-space: nowrap; }
+  .env-table td:nth-child(2) { font-family: 'JetBrains Mono'; color: var(--green); font-size: 0.8rem; }
+  .env-table td:nth-child(3) { color: var(--text-muted); }
+  .env-wrap { background: rgba(0,0,0,0.4); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+
+  /* ── Test commands ── */
+  .cmd-list { display: flex; flex-direction: column; gap: 12px; }
+  .cmd-item { padding: 16px 20px; border-radius: 10px; background: rgba(0,0,0,0.45); border: 1px solid var(--border); }
+  .cmd-label { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+  .cmd-code  { font-family: 'JetBrains Mono'; font-size: 0.82rem; color: var(--green); }
+  .cmd-desc  { font-size: 0.78rem; color: var(--text-dim); margin-top: 5px; }
+
+  /* ── What-grid ── */
+  .what-grid  { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px,1fr)); gap: 18px; }
+  .what-card  { padding: 26px; }
+  .what-icon  { font-size: 1.9rem; margin-bottom: 12px; }
+  .what-card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 6px; }
+  .what-card p  { font-size: 0.84rem; color: var(--text-muted); line-height: 1.65; }
+
   /* ── Divider ── */
-  .divider { height: 1px; background: linear-gradient(90deg, transparent, var(--border), transparent); margin: 20px 0; }
+  .divider { height: 1px; background: linear-gradient(90deg,transparent,var(--border),transparent); margin: 8px 0; }
 
   /* ── Footer ── */
-  footer {
-    padding: 40px 24px;
-    text-align: center;
-    border-top: 1px solid var(--border);
-    color: var(--text-dim);
-    font-size: 0.8rem;
-    margin-top: 80px;
-  }
+  footer { padding: 44px 28px; text-align: center; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 0.78rem; margin-top: 80px; }
 
-  /* ── Scrollbar ── */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: var(--bg); }
   ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
 
-  @media (max-width: 600px) {
-    .pipeline-flow { flex-direction: column; }
-    .pipeline-arrow { transform: rotate(90deg); }
-    .retry-row { flex-direction: column; }
-    .retry-link-arrow { transform: rotate(90deg); }
+  @media (max-width:640px) {
+    .arch-layer-big { grid-template-columns: 42px 1fr; }
+    .phase-item { grid-template-columns: 36px 1fr; }
+    .phase-status { display: none; }
   }
 </style>
 </head>
@@ -414,576 +265,650 @@
 <!-- Navbar -->
 <nav>
   <div class="nav-inner">
-    <div class="logo">
-      <div class="logo-dot"></div>
-      AgentLens
-    </div>
+    <div class="logo"><div class="logo-dot"></div>AgentLens</div>
     <div class="nav-links">
-      <a href="#what">What is it</a>
+      <a href="#phases">Phases</a>
       <a href="#arch">Architecture</a>
-      <a href="#pipeline">Pipeline</a>
-      <a href="#wrappers">SDK</a>
-      <a href="#retry">Retry</a>
+      <a href="#dataflow">Data Flow</a>
+      <a href="#database">Database</a>
+      <a href="#files">File Tree</a>
+      <a href="#env">Env Vars</a>
+      <a href="#testing">Testing</a>
     </div>
   </div>
 </nav>
 
-<!-- ══════════════════════ HERO ══════════════════════ -->
+<!-- ═══════════════════════ HERO ═══════════════════════ -->
 <div class="page">
   <div class="hero">
-    <div class="hero-badge">🔭 Final Year Project</div>
+    <div class="hero-badge">🔭 Final Year Project — Live Architecture Map</div>
     <h1>AgentLens</h1>
-    <p>An <strong>AI Agent Observability Platform</strong> — traces every step an LLM agent takes, captures failures automatically, and makes debugging painless.</p>
+    <p class="hero-sub">AI Agent Observability Platform — traces every step an LLM agent takes, captures failures automatically, persists everything in SQLite, and serves it through a REST API + live dashboard.</p>
     <div class="hero-tags">
-      <span class="tag tag-teal">FastAPI Backend</span>
-      <span class="tag tag-purple">Gemini AI</span>
+      <span class="tag tag-teal">FastAPI REST API</span>
+      <span class="tag tag-purple">Gemini 2.5 Flash</span>
       <span class="tag tag-cyan">Async Python SDK</span>
-      <span class="tag tag-green">Automatic Failure Capture</span>
-      <span class="tag tag-orange">Retry Linkage</span>
+      <span class="tag tag-green">SQLite + aiosqlite</span>
+      <span class="tag tag-orange">WAL + Read Pool</span>
+      <span class="tag tag-red">Auto Failure Capture</span>
+      <span class="tag tag-blue">Keyset Pagination</span>
     </div>
   </div>
 </div>
 
-<!-- ══════════════════════ WHAT IS IT ══════════════════════ -->
+<!-- ═══════════════════════ WHAT IS IT ═══════════════════════ -->
 <div class="page section" id="what">
-  <div class="section-label">01 — Overview</div>
-  <div class="section-title">What is AgentLens?</div>
-  <p class="section-desc">An observability SDK + REST API that automatically instruments AI agents — capturing every LLM call, tool invocation, and failure — so you can debug and replay any run.</p>
+  <div class="section-label">00 — Overview</div>
+  <div class="section-title">What AgentLens Does</div>
+  <p class="section-desc">A complete stack for watching AI agents think — from SDK wrappers around every function call, all the way to a browsable web dashboard.</p>
 
   <div class="what-grid">
     <div class="card what-card">
       <div class="what-icon">🔭</div>
       <h3>Full-Trace Observability</h3>
-      <p>Every action the agent takes — planning, searching, retrieving, synthesizing — is recorded as a structured <code>AgentEvent</code> with timing, inputs, outputs, and status.</p>
+      <p>Every action the agent takes — planning, searching, tool calls, LLM calls — is recorded as a structured <code>AgentEvent</code> with timestamps, inputs, outputs, status, latency, and importance score.</p>
     </div>
     <div class="card what-card">
       <div class="what-icon">💥</div>
       <h3>Automatic Failure Capture</h3>
-      <p>New SDK wrappers (<code>capture_llm_call</code>, <code>capture_tool_call</code>, <code>capture_step</code>) detect exceptions, persist a FAILURE event with <strong>exception_type + message</strong>, then re-raise — so the trace survives even if the process dies.</p>
+      <p>SDK wrappers (<code>capture_llm_call</code>, <code>capture_tool_call</code>, <code>capture_step</code>) catch exceptions, persist a FAILURE event with <strong>exception_type + message</strong>, then re-raise. The trace survives even if the process crashes.</p>
+    </div>
+    <div class="card what-card">
+      <div class="what-icon">🗄️</div>
+      <h3>SQLite Persistence</h3>
+      <p>Phase 7 adds a full async SQLite backend — WAL journal mode, 1 write connection behind a lock, 4 read connections in a pool, automatic schema migrations, keyset pagination for traces.</p>
     </div>
     <div class="card what-card">
       <div class="what-icon">🔄</div>
       <h3>Retry Linkage</h3>
-      <p>When an agent retries a failed step, the new event carries <code>retry_of</code> (pointer to the original failure) and an incremented <code>attempt</code> counter — building an audit chain.</p>
+      <p>When an agent retries a failed step the new event carries <code>retry_of</code> (pointer to the original failure) and an incremented <code>attempt</code> counter — building a full audit chain.</p>
     </div>
     <div class="card what-card">
       <div class="what-icon">🌐</div>
-      <h3>REST API</h3>
-      <p><code>POST /api/run</code> triggers the multi-step research agent. <code>GET /api/traces/{id}</code> retrieves any trace with filtering by status or event type.</p>
+      <h3>REST API + Dashboard</h3>
+      <p><code>POST /api/run</code> triggers the multi-step Gemini research agent. <code>GET /api/traces</code> lists with filters. The frontend dashboard replays every trace visually.</p>
     </div>
     <div class="card what-card">
       <div class="what-icon">⚡</div>
-      <h3>Async-Safe SDK</h3>
-      <p>All context (trace ID, parent ID, agent ID) lives in <code>contextvars</code> — so concurrent agents each maintain isolated traces without any locks.</p>
-    </div>
-    <div class="card what-card">
-      <div class="what-icon">🧪</div>
-      <h3>172 Tests Passing</h3>
-      <p>Comprehensive test suite covering unit, integration, and HTTP-layer tests. 18 new tests added specifically for the automatic failure capture feature.</p>
+      <h3>Dual Storage Backend</h3>
+      <p><code>AGENTLENS_STORAGE=memory</code> (default) keeps all tests green and fast. <code>AGENTLENS_STORAGE=sqlite</code> switches to the persistent SQLite backend for the live demo. Zero code change needed.</p>
     </div>
   </div>
 </div>
 
-<!-- ══════════════════════ ARCHITECTURE ══════════════════════ -->
+<!-- ═══════════════════════ PHASES ═══════════════════════ -->
+<div class="page section" id="phases">
+  <div class="section-label">01 — Build Progress</div>
+  <div class="section-title">Feature Phases</div>
+  <p class="section-desc">Each phase is a git branch. Track exactly what is done, what branch you are on now, and what comes next.</p>
+
+  <div class="phase-grid">
+
+    <div class="phase-item">
+      <div class="phase-num" style="color:var(--green)">1</div>
+      <div class="phase-info">
+        <h4>Event Models &amp; Base Storage</h4>
+        <p>Defined <code>AgentEvent</code>, <code>Trace</code>, <code>EventType</code>, <code>EventStatus</code>, <code>ObservationLevel</code> Pydantic models. Abstract <code>EventStore</code> + <code>TraceStore</code> interfaces. In-memory implementations.</p>
+        <div class="phase-files">branch: feature/event-models &nbsp;·&nbsp; events.py · storage/base.py · storage/memory.py</div>
+      </div>
+      <div class="phase-status ps-done">✓ Done</div>
+    </div>
+
+    <div class="phase-item">
+      <div class="phase-num" style="color:var(--green)">2</div>
+      <div class="phase-info">
+        <h4>Async SDK Collector</h4>
+        <p>Context-var based <code>EventCollector</code> — <code>traced()</code> context manager, <code>record_event()</code>, automatic timing. <code>ContextualCollector</code> normalises raw dicts from the AI agent into typed <code>AgentEvent</code>s.</p>
+        <div class="phase-files">branch: feature/storage &nbsp;·&nbsp; sdk_collector/collector.py · sdk_collector/normalizer.py · sdk_collector/context.py</div>
+      </div>
+      <div class="phase-status ps-done">✓ Done</div>
+    </div>
+
+    <div class="phase-item">
+      <div class="phase-num" style="color:var(--green)">3</div>
+      <div class="phase-info">
+        <h4>FastAPI REST API</h4>
+        <p>Full REST layer — <code>POST /api/run</code> runs the agent, <code>GET /api/traces</code> / <code>GET /api/traces/{id}</code> / <code>GET /api/events/{id}</code>. Static frontend served at <code>/app/</code>. Swagger at <code>/docs</code>.</p>
+        <div class="phase-files">branch: feature/trace-api &nbsp;·&nbsp; web_api.py · run_demo.py · frontend/</div>
+      </div>
+      <div class="phase-status ps-done">✓ Done</div>
+    </div>
+
+    <div class="phase-item">
+      <div class="phase-num" style="color:var(--green)">4</div>
+      <div class="phase-info">
+        <h4>Gemini AI Integration</h4>
+        <p>Multi-step research agent using <code>google-genai</code>. Phases: Planning → Search → Retrieval → Memory → Synthesis → Final Response. Each step wrapped with SDK collector.</p>
+        <div class="phase-files">collector.py (Gemini call path) · examples/basic_workflow.py</div>
+      </div>
+      <div class="phase-status ps-done">✓ Done</div>
+    </div>
+
+    <div class="phase-item">
+      <div class="phase-num" style="color:var(--green)">5</div>
+      <div class="phase-info">
+        <h4>Frontend Dashboard</h4>
+        <p>Vanilla HTML/JS/CSS dashboard at <code>/app/</code>. Live trace list, event timeline, status badges, latency charts, filter by agent/status. Real-time polling of <code>/api/traces</code>.</p>
+        <div class="phase-files">frontend/index.html · frontend/app.js · frontend/style.css · frontend/test.html</div>
+      </div>
+      <div class="phase-status ps-done">✓ Done</div>
+    </div>
+
+    <div class="phase-item">
+      <div class="phase-num" style="color:var(--green)">6</div>
+      <div class="phase-info">
+        <h4>Automatic Failure Capture</h4>
+        <p>New SDK wrappers detect exceptions at the boundary, persist FAILURE events with <code>exception_type</code> + <code>traceback_summary</code>, re-raise. Retry linkage via <code>retry_of</code> + <code>attempt</code>. 18 new tests.</p>
+        <div class="phase-files">branch: feature/automatic-failure-capture &nbsp;·&nbsp; sdk_collector/collector.py · tests/test_failure_capture.py · tests/test_failure_tracking.py</div>
+      </div>
+      <div class="phase-status ps-done">✓ Done</div>
+    </div>
+
+    <div class="phase-item" style="border-color:rgba(99,179,237,0.4); box-shadow: 0 0 18px rgba(99,179,237,0.1);">
+      <div class="phase-num" style="color:var(--cyan)">7</div>
+      <div class="phase-info">
+        <h4 style="color:var(--cyan)">Database Backend ← YOU ARE HERE</h4>
+        <p>Async SQLite via <code>aiosqlite</code>. <code>Database</code> class: 1 write lock + 4-connection read pool. WAL mode, migrations runner, <code>SqliteEventStore</code> + <code>SqliteTraceStore</code>, keyset pagination, bulk-save, memory parity methods (<code>list_trace_page</code>, <code>count_traces</code>).</p>
+        <div class="phase-files">branch: feature/database-backend &nbsp;·&nbsp; storage/db.py · storage/sqlite.py · migrations/0001_initial.sql · storage/memory.py (parity) · storage/base.py</div>
+      </div>
+      <div class="phase-status ps-active">⬤ Active</div>
+    </div>
+
+    <div class="phase-item" style="opacity:0.55;">
+      <div class="phase-num" style="color:var(--purple)">8</div>
+      <div class="phase-info">
+        <h4>Adaptive Observation Levels</h4>
+        <p>Implement <code>ObservationLevel</code> routing — FULL / COMPRESSED / METADATA_ONLY / DROP — based on importance score and configurable thresholds. Cost-efficiency goal.</p>
+        <div class="phase-files">storage/base.py · sdk_collector/collector.py</div>
+      </div>
+      <div class="phase-status ps-next">Next</div>
+    </div>
+
+    <div class="phase-item" style="opacity:0.45;">
+      <div class="phase-num" style="color:var(--text-dim)">9</div>
+      <div class="phase-info">
+        <h4>Causal Graph + Replay</h4>
+        <p>Build a parent→child event DAG. Visual replay in the dashboard. "What caused this failure?" one-click root-cause traversal.</p>
+        <div class="phase-files">TBD — new api endpoints + frontend graph view</div>
+      </div>
+      <div class="phase-status ps-next">Planned</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════ ARCHITECTURE ═══════════════════════ -->
 <div class="page section" id="arch">
   <div class="section-label">02 — Architecture</div>
-  <div class="section-title">System Components</div>
-  <p class="section-desc">Four layers, each with a single responsibility — from the AI agent down to persistent storage.</p>
+  <div class="section-title">System Layers</div>
+  <p class="section-desc">Six layers, each with one responsibility. Requests flow top-down; events flow bottom-up through the storage layer.</p>
 
-  <div class="arch-box">
-    <div class="arch-layers">
+  <div class="arch-stack">
 
-      <div class="arch-layer layer-ai">
-        <div class="layer-icon">🤖</div>
-        <div class="layer-name">AI Agent (Gemini)</div>
-        <div class="layer-desc">Multi-step research agent powered by Gemini 2.5 Flash — plans, searches, retrieves, synthesizes</div>
+    <div class="arch-layer-big ls-ai">
+      <div class="layer-stripe">🤖</div>
+      <div class="layer-body">
+        <h3>AI Agent — Gemini 2.5 Flash</h3>
+        <div class="lb-desc">Multi-step research agent that calls <code>collector.py</code> wrappers at each stage. Runs inside <code>POST /api/run</code>.</div>
+        <div class="layer-pills">
+          <span class="pill pill-purple">Planning</span>
+          <span class="pill pill-purple">Web Search</span>
+          <span class="pill pill-purple">Retrieval</span>
+          <span class="pill pill-purple">Memory Read/Write</span>
+          <span class="pill pill-purple">Synthesis</span>
+          <span class="pill pill-purple">Final Response</span>
+        </div>
       </div>
-      <div class="arch-arrow">▼</div>
-
-      <div class="arch-layer layer-sdk">
-        <div class="layer-icon">🛡️</div>
-        <div class="layer-name">SDK Collector</div>
-        <div class="layer-desc">capture_llm_call · capture_tool_call · capture_step — async context managers that time steps and record SUCCESS / FAILURE events automatically</div>
-      </div>
-      <div class="arch-arrow">▼</div>
-
-      <div class="arch-layer layer-api">
-        <div class="layer-icon">🌐</div>
-        <div class="layer-name">FastAPI Web API</div>
-        <div class="layer-desc">POST /api/run · GET /api/traces/{id} — orchestrates the pipeline and exposes traces over HTTP</div>
-      </div>
-      <div class="arch-arrow">▼</div>
-
-      <div class="arch-layer layer-storage">
-        <div class="layer-icon">🗄️</div>
-        <div class="layer-name">Storage Layer</div>
-        <div class="layer-desc">InMemoryEventStore · InMemoryTraceStore — swappable backends (production uses persistent DB)</div>
-      </div>
-      <div class="arch-arrow">▼</div>
-
-      <div class="arch-layer layer-frontend">
-        <div class="layer-icon">📊</div>
-        <div class="layer-name">Frontend Dashboard</div>
-        <div class="layer-desc">Served at /app/ — visual trace explorer, event timeline, failure inspector</div>
-      </div>
-
     </div>
-  </div>
+    <div class="arch-down-arrow">↓ wraps every call in a context-var trace</div>
 
-  <!-- File tree -->
-  <div class="section-label" style="margin-top:40px">Changed Files</div>
+    <div class="arch-layer-big ls-sdk">
+      <div class="layer-stripe">🧰</div>
+      <div class="layer-body">
+        <h3>SDK Collector — <code>sdk_collector/</code></h3>
+        <div class="lb-desc">Async-safe, context-var-based instrumentation. Zero lock contention across concurrent agent traces.</div>
+        <div class="layer-pills">
+          <span class="pill pill-teal">collector.py — EventCollector</span>
+          <span class="pill pill-teal">context.py — contextvars</span>
+          <span class="pill pill-teal">normalizer.py — dict→AgentEvent</span>
+          <span class="pill pill-teal">capture_llm_call()</span>
+          <span class="pill pill-teal">capture_tool_call()</span>
+          <span class="pill pill-teal">capture_step()</span>
+        </div>
+      </div>
+    </div>
+    <div class="arch-down-arrow">↓ await storage.save_event(event)</div>
+
+    <div class="arch-layer-big ls-storage">
+      <div class="layer-stripe">🗃️</div>
+      <div class="layer-body">
+        <h3>Storage Layer — <code>storage/</code></h3>
+        <div class="lb-desc">Abstract interfaces + two concrete backends. Default = memory (tests). Demo = SQLite (run_demo.py). Switch via env var — no code change.</div>
+        <div class="layer-pills">
+          <span class="pill pill-orange">base.py — EventStore / TraceStore (ABC)</span>
+          <span class="pill pill-orange">memory.py — InMemory (default)</span>
+          <span class="pill pill-orange">sqlite.py — SqliteEventStore / SqliteTraceStore</span>
+          <span class="pill pill-orange">db.py — Database class + migrations</span>
+        </div>
+      </div>
+    </div>
+    <div class="arch-down-arrow">↓ aiosqlite (WAL mode, 1 write + 4 read connections)</div>
+
+    <div class="arch-layer-big ls-db">
+      <div class="layer-stripe">🗄️</div>
+      <div class="layer-body">
+        <h3>SQLite Database — <code>agentlens.db</code></h3>
+        <div class="lb-desc">Two tables (<code>events</code>, <code>traces</code>), seven indexes, schema migrations tracked in <code>schema_migrations</code>. Path set by <code>AGENTLENS_DB_PATH</code>.</div>
+        <div class="layer-pills">
+          <span class="pill pill-green">TABLE events (13 cols)</span>
+          <span class="pill pill-green">TABLE traces (8 cols)</span>
+          <span class="pill pill-green">migrations/0001_initial.sql</span>
+          <span class="pill pill-green">WAL · synchronous=NORMAL · busy_timeout=5000ms</span>
+          <span class="pill pill-green">foreign_keys=ON</span>
+        </div>
+      </div>
+    </div>
+    <div class="arch-down-arrow">↑ data exposed via REST ↑</div>
+
+    <div class="arch-layer-big ls-api">
+      <div class="layer-stripe">🌐</div>
+      <div class="layer-body">
+        <h3>FastAPI REST API — <code>web_api.py</code></h3>
+        <div class="lb-desc">All routes are async. CORS enabled. Static frontend files served at <code>/app/</code>. OpenAPI at <code>/docs</code>.</div>
+        <div class="layer-pills">
+          <span class="pill pill-cyan">POST /api/run</span>
+          <span class="pill pill-cyan">GET  /api/traces</span>
+          <span class="pill pill-cyan">GET  /api/traces/{id}</span>
+          <span class="pill pill-cyan">GET  /api/events/{id}</span>
+          <span class="pill pill-cyan">GET  /app/ (dashboard)</span>
+          <span class="pill pill-cyan">GET  /docs (Swagger)</span>
+        </div>
+      </div>
+    </div>
+    <div class="arch-down-arrow">↓ HTTP responses to browser</div>
+
+    <div class="arch-layer-big ls-ui">
+      <div class="layer-stripe">🖥️</div>
+      <div class="layer-body">
+        <h3>Frontend Dashboard — <code>frontend/</code></h3>
+        <div class="lb-desc">Vanilla HTML/JS/CSS. Polls the REST API. Renders trace list, event timeline, status badges, latency breakdown.</div>
+        <div class="layer-pills">
+          <span class="pill pill-blue">index.html</span>
+          <span class="pill pill-blue">app.js — fetch + render</span>
+          <span class="pill pill-blue">style.css</span>
+          <span class="pill pill-blue">test.html — manual test harness</span>
+          <span class="pill pill-blue">test.js</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════ DATA FLOW ═══════════════════════ -->
+<div class="page section" id="dataflow">
+  <div class="section-label">03 — Data Flow</div>
+  <div class="section-title">How One Request Travels</div>
+  <p class="section-desc">Follow a single <code>POST /api/run</code> request from the browser all the way to the SQLite database and back.</p>
+
+  <div class="flow-diagram">
+
+    <div class="flow-step">
+      <div class="flow-step-icon">🖱️</div>
+      <div class="flow-step-content">
+        <h4>1. Browser / Client → POST /api/run</h4>
+        <p>User hits "Run" in the dashboard (or calls the API directly). A JSON body like <code>{"topic": "climate change"}</code> is sent.</p>
+        <div class="flow-step-code"><span class="kw">POST</span> http://localhost:8000/api/run<br>Content-Type: application/json<br>{ <span class="str">"topic"</span>: <span class="str">"climate change"</span> }</div>
+      </div>
+    </div>
+    <div class="step-arrow">↓</div>
+
+    <div class="flow-step">
+      <div class="flow-step-icon">⚙️</div>
+      <div class="flow-step-content">
+        <h4>2. FastAPI Route Handler — <code>web_api.py</code></h4>
+        <p>Creates a new <code>Trace</code>, saves it to <code>TraceStore</code>, spawns the Gemini agent coroutine.</p>
+        <div class="flow-step-code"><span class="kw">trace</span> = <span class="fn">create_trace</span>(agent_id=<span class="str">"research-agent"</span>)<br><span class="kw">await</span> trace_store.<span class="fn">save_trace</span>(trace)</div>
+      </div>
+    </div>
+    <div class="step-arrow">↓</div>
+
+    <div class="flow-step">
+      <div class="flow-step-icon">🤖</div>
+      <div class="flow-step-content">
+        <h4>3. Multi-Step Gemini Agent — <code>collector.py</code></h4>
+        <p>Runs 6 sequential phases. Each phase is wrapped by an SDK context manager that starts a timer, calls Gemini, and records the result.</p>
+        <div class="flow-step-code"><span class="kw">async with</span> collector.<span class="fn">traced</span>(agent_id, trace_id):<br>&nbsp;&nbsp;<span class="kw">async with</span> collector.<span class="fn">capture_llm_call</span>(<span class="str">"planning"</span>):<br>&nbsp;&nbsp;&nbsp;&nbsp;result = <span class="kw">await</span> gemini.<span class="fn">generate</span>(prompt)</div>
+      </div>
+    </div>
+    <div class="step-arrow">↓</div>
+
+    <div class="flow-step">
+      <div class="flow-step-icon">💥</div>
+      <div class="flow-step-content">
+        <h4>4. Failure Capture (if exception)</h4>
+        <p>If Gemini throws, the context manager catches it, writes a FAILURE event with <code>exception_type</code>, <code>traceback_summary</code>, then re-raises. The trace record stays intact.</p>
+        <div class="flow-step-code"><span class="cm"># automatically inside capture_llm_call()</span><br><span class="kw">except</span> Exception <span class="kw">as</span> e:<br>&nbsp;&nbsp;<span class="kw">await</span> store.<span class="fn">save_event</span>(AgentEvent(status=<span class="str">FAILURE</span>, ...))<br>&nbsp;&nbsp;<span class="kw">raise</span></div>
+      </div>
+    </div>
+    <div class="step-arrow">↓</div>
+
+    <div class="flow-step">
+      <div class="flow-step-icon">🧩</div>
+      <div class="flow-step-content">
+        <h4>5. Normalizer — dict → AgentEvent</h4>
+        <p><code>sdk_collector/normalizer.py</code> converts the raw Gemini response dict into a validated <code>AgentEvent</code> Pydantic model with correct types, UUIDs, and timestamps.</p>
+        <div class="flow-step-code">event = <span class="fn">AgentEvent</span>.model_validate({<br>&nbsp;&nbsp;<span class="str">"event_type"</span>: <span class="str">"llm_call"</span>,<br>&nbsp;&nbsp;<span class="str">"latency_ms"</span>: elapsed_ms,  <span class="str">"status"</span>: <span class="str">"success"</span><br>})</div>
+      </div>
+    </div>
+    <div class="step-arrow">↓</div>
+
+    <div class="flow-step">
+      <div class="flow-step-icon">🗃️</div>
+      <div class="flow-step-content">
+        <h4>6. Storage Layer — save to backend</h4>
+        <p><code>EventStore.save_event(event)</code> called. If <code>AGENTLENS_STORAGE=sqlite</code>: JSON-encodes JSON fields, formats datetime as UTC ISO-8601, runs <code>INSERT OR REPLACE INTO events</code>. If <code>memory</code>: just stores in dict.</p>
+        <div class="flow-step-code"><span class="cm"># sqlite.py</span><br><span class="kw">await</span> db.<span class="fn">execute_write</span>(<span class="str">"INSERT OR REPLACE INTO events ..."</span>, row)</div>
+      </div>
+    </div>
+    <div class="step-arrow">↓</div>
+
+    <div class="flow-step">
+      <div class="flow-step-icon">🗄️</div>
+      <div class="flow-step-content">
+        <h4>7. SQLite — WAL write committed</h4>
+        <p>Write connection (1, behind <code>asyncio.Lock</code>) appends to the WAL file. <code>commit()</code> atomically moves it to the main DB file. Concurrent reads from the 4-connection pool are never blocked.</p>
+        <div class="flow-step-code">agentlens.db-wal  <span class="cm">← write goes here first</span><br>agentlens.db      <span class="cm">← checkpoint merges WAL → main DB</span></div>
+      </div>
+    </div>
+    <div class="step-arrow">↑ response</div>
+
+    <div class="flow-step">
+      <div class="flow-step-icon">📡</div>
+      <div class="flow-step-content">
+        <h4>8. API returns Trace JSON to browser</h4>
+        <p>The route handler calls <code>trace_store.get_trace(id)</code> (read pool), serialises to JSON, returns 200. The dashboard polls <code>/api/traces</code> and renders the event timeline.</p>
+        <div class="flow-step-code">{ <span class="str">"trace_id"</span>: <span class="str">"..."</span>, <span class="str">"status"</span>: <span class="str">"success"</span>,<br>&nbsp;&nbsp;<span class="str">"event_count"</span>: 6, <span class="str">"total_latency_ms"</span>: 3421 }</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════ DATABASE DETAIL ═══════════════════════ -->
+<div class="page section" id="database">
+  <div class="section-label">04 — Database Layer (Phase 7)</div>
+  <div class="section-title">SQLite Backend — How It Works</div>
+  <p class="section-desc">The new <code>storage/db.py</code> + <code>storage/sqlite.py</code> — every design decision explained.</p>
+
+  <div class="db-grid">
+
+    <div class="card db-card">
+      <h3>🔐 Write Connection</h3>
+      <p>One single <code>aiosqlite</code> connection shared across all writes. An <code>asyncio.Lock</code> ensures only one coroutine writes at a time — no SQLite BUSY errors.</p>
+      <div class="kv-list">
+        <div class="kv-row"><span class="kv-key">connections</span><span class="kv-val">1 (write only)</span></div>
+        <div class="kv-row"><span class="kv-key">concurrency</span><span class="kv-val">asyncio.Lock</span></div>
+        <div class="kv-row"><span class="kv-key">commit</span><span class="kv-val">after every write / bulk op</span></div>
+        <div class="kv-row"><span class="kv-key">executemany</span><span class="kv-val">single transaction for bulk</span></div>
+      </div>
+    </div>
+
+    <div class="card db-card">
+      <h3>📖 Read Pool</h3>
+      <p>4 independent connections in an <code>asyncio.Queue</code>. Any coroutine that needs to read checks one out, uses it, puts it back — reads never block writes thanks to WAL.</p>
+      <div class="kv-list">
+        <div class="kv-row"><span class="kv-key">pool size</span><span class="kv-val">N = 4</span></div>
+        <div class="kv-row"><span class="kv-key">mechanism</span><span class="kv-val">asyncio.Queue</span></div>
+        <div class="kv-row"><span class="kv-key">WAL benefit</span><span class="kv-val">reads never blocked by writes</span></div>
+      </div>
+    </div>
+
+    <div class="card db-card">
+      <h3>⚙️ PRAGMA Config</h3>
+      <p>Applied to every connection (read and write) when it is first opened.</p>
+      <div class="kv-list">
+        <div class="kv-row"><span class="kv-key">journal_mode</span><span class="kv-val">WAL</span></div>
+        <div class="kv-row"><span class="kv-key">synchronous</span><span class="kv-val">NORMAL</span></div>
+        <div class="kv-row"><span class="kv-key">busy_timeout</span><span class="kv-val">5000 ms</span></div>
+        <div class="kv-row"><span class="kv-key">foreign_keys</span><span class="kv-val">ON</span></div>
+      </div>
+    </div>
+
+    <div class="card db-card">
+      <h3>📦 Migration Runner</h3>
+      <p>On startup, scans <code>migrations/*.sql</code> sorted by filename. Applies unapplied ones in order. Records each in <code>schema_migrations(version, applied_at)</code>. Idempotent — safe to restart.</p>
+      <div class="kv-list">
+        <div class="kv-row"><span class="kv-key">applied file</span><span class="kv-val">0001_initial.sql ✓</span></div>
+        <div class="kv-row"><span class="kv-key">tracking table</span><span class="kv-val">schema_migrations</span></div>
+        <div class="kv-row"><span class="kv-key">each migration</span><span class="kv-val">one transaction</span></div>
+      </div>
+    </div>
+
+    <div class="card db-card">
+      <h3>📄 Keyset Pagination</h3>
+      <p><code>list_trace_page()</code> uses row-value comparison for stable, fast pages — no OFFSET scan even with millions of traces. Cursor is base64-encoded <code>"start_time|trace_id"</code>.</p>
+      <div class="kv-list">
+        <div class="kv-row"><span class="kv-key">SQL</span><span class="kv-val">WHERE (start_time, trace_id) &lt; (?, ?)</span></div>
+        <div class="kv-row"><span class="kv-key">order</span><span class="kv-val">start_time DESC, trace_id DESC</span></div>
+        <div class="kv-row"><span class="kv-key">cursor</span><span class="kv-val">base64("st|tid")</span></div>
+        <div class="kv-row"><span class="kv-key">default page</span><span class="kv-val">20 traces</span></div>
+      </div>
+    </div>
+
+    <div class="card db-card">
+      <h3>🔀 Dual Backend</h3>
+      <p>Switching storage is one env var. Both backends implement the exact same abstract interface so routes and collector code never know which is active.</p>
+      <div class="kv-list">
+        <div class="kv-row"><span class="kv-key">AGENTLENS_STORAGE=memory</span><span class="kv-val">InMemory (default)</span></div>
+        <div class="kv-row"><span class="kv-key">AGENTLENS_STORAGE=sqlite</span><span class="kv-val">SQLite backend</span></div>
+        <div class="kv-row"><span class="kv-key">run_demo.py</span><span class="kv-val">opts into sqlite</span></div>
+        <div class="kv-row"><span class="kv-key">pytest</span><span class="kv-val">always memory → fast</span></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════ FILE TREE ═══════════════════════ -->
+<div class="page section" id="files">
+  <div class="section-label">05 — Code Structure</div>
+  <div class="section-title">File Tree</div>
+  <p class="section-desc"><span style="color:var(--green)">Green = new in Phase 7</span> &nbsp; <span style="color:var(--orange)">Orange = modified in Phase 7</span></p>
+
   <div class="file-tree">
-    <span class="ft-dir">agentlens/</span><br/>
-    &nbsp;&nbsp;<span class="ft-dir">src/agentlens/</span><br/>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="ft-dir">sdk_collector/</span><br/>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="ft-modified">collector.py</span> <span class="ft-tag ft-tag-mod">MODIFIED</span>
-    <span style="color:var(--text-muted);font-size:0.72rem;margin-left:8px">+ capture_step / capture_llm_call / capture_tool_call</span><br/>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="ft-file">context.py</span><br/>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="ft-file">normalizer.py</span><br/>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="ft-modified">web_api.py</span> <span class="ft-tag ft-tag-mod">MODIFIED</span>
-    <span style="color:var(--text-muted);font-size:0.72rem;margin-left:8px">_AgentRunner.run() — per-step wrappers replacing coarse try/except</span><br/>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="ft-file">events.py</span><br/>
-    &nbsp;&nbsp;<span class="ft-dir">tests/</span><br/>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="ft-new">test_failure_capture.py</span> <span class="ft-tag ft-tag-new">NEW — 18 tests</span><br/>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="ft-file">test_collector.py</span> <span style="color:var(--text-muted);font-size:0.72rem;margin-left:4px">(all existing tests still pass)</span><br/>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="ft-file">test_web_api.py</span><br/>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="ft-file">test_events.py</span><br/>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="ft-file">test_storage.py</span>
+<span class="ft-dir">agentlens/</span><br>
+├── <span class="ft-dir">src/agentlens/</span><br>
+│   ├── <span class="ft-file">__init__.py</span><br>
+│   ├── <span class="ft-file">events.py</span>               <span class="ft-tag ft-tag-mod">AgentEvent · Trace · enums</span><br>
+│   ├── <span class="ft-file">collector.py</span>            <span class="ft-tag ft-tag-mod">Gemini agent + SDK wrappers</span><br>
+│   ├── <span class="ft-file">web_api.py</span>              <span class="ft-tag ft-tag-mod">FastAPI routes</span><br>
+│   ├── <span class="ft-dir">sdk_collector/</span><br>
+│   │   ├── <span class="ft-file">collector.py</span>        <span class="ft-tag ft-tag-mod">EventCollector · capture_*</span><br>
+│   │   ├── <span class="ft-file">normalizer.py</span>       <span class="ft-tag ft-tag-mod">dict → AgentEvent</span><br>
+│   │   └── <span class="ft-file">context.py</span>          <span class="ft-tag ft-tag-mod">contextvars</span><br>
+│   ├── <span class="ft-dir">storage/</span><br>
+│   │   ├── <span class="ft-file">__init__.py</span>         <span class="ft-tag ft-tag-mod">exports all backends</span><br>
+│   │   ├── <span class="ft-file">base.py</span>             <span class="ft-tag ft-tag-mod">+list_trace_page +count_traces abstract</span><br>
+│   │   ├── <span class="ft-file">memory.py</span>           <span class="ft-tag ft-tag-mod">+list_trace_page +count_traces parity</span><br>
+│   │   ├── <span class="ft-new">db.py</span>               <span class="ft-tag ft-tag-new">NEW — Database class + migration runner</span><br>
+│   │   └── <span class="ft-new">sqlite.py</span>           <span class="ft-tag ft-tag-new">NEW — SqliteEventStore + SqliteTraceStore</span><br>
+│   └── <span class="ft-dir">migrations/</span><br>
+│       ├── <span class="ft-new">__init__.py</span>         <span class="ft-tag ft-tag-new">NEW — package marker</span><br>
+│       └── <span class="ft-new">0001_initial.sql</span>    <span class="ft-tag ft-tag-new">NEW — events · traces · 7 indexes</span><br>
+├── <span class="ft-dir">tests/</span><br>
+│   ├── <span class="ft-file">conftest.py</span>             <span class="ft-tag ft-tag-mod">fixtures</span><br>
+│   ├── <span class="ft-file">test_storage.py</span>         <span class="ft-tag ft-tag-mod">29 passing unit tests</span><br>
+│   ├── <span class="ft-file">test_failure_capture.py</span><br>
+│   ├── <span class="ft-file">test_failure_tracking.py</span><br>
+│   ├── <span class="ft-file">test_events.py</span><br>
+│   ├── <span class="ft-file">test_collector.py</span><br>
+│   ├── <span class="ft-file">test_web_api.py</span><br>
+│   └── <span class="ft-new">smoke_sqlite.py</span>         <span class="ft-tag ft-tag-new">NEW — SQLite integration smoke test</span><br>
+├── <span class="ft-dir">frontend/</span><br>
+│   ├── <span class="ft-file">index.html</span><br>
+│   ├── <span class="ft-file">app.js</span><br>
+│   ├── <span class="ft-file">style.css</span><br>
+│   └── <span class="ft-file">test.html / test.js</span><br>
+├── <span class="ft-mod">pyproject.toml</span>              <span class="ft-tag ft-tag-mod">+aiosqlite&gt;=0.19.0</span><br>
+├── <span class="ft-mod">.env.example</span>               <span class="ft-tag ft-tag-mod">+AGENTLENS_DB_PATH +AGENTLENS_STORAGE</span><br>
+└── <span class="ft-file">run_demo.py</span>                 <span class="ft-tag ft-tag-mod">opts into sqlite backend</span>
   </div>
 </div>
 
-<!-- ══════════════════════ PIPELINE ══════════════════════ -->
-<div class="page section" id="pipeline">
-  <div class="section-label">03 — Pipeline</div>
-  <div class="section-title">The 6-Step Research Pipeline</div>
-  <p class="section-desc">Click a step to simulate a failure mid-run. Watch how the trace captures exactly one FAILURE event with the exception details, while completed steps keep their SUCCESS status.</p>
+<!-- ═══════════════════════ ENV VARS ═══════════════════════ -->
+<div class="page section" id="env">
+  <div class="section-label">06 — Configuration</div>
+  <div class="section-title">Environment Variables</div>
+  <p class="section-desc">Copy <code>.env.example</code> to <code>.env</code> and fill in your values. All variables are optional — defaults shown below.</p>
 
-  <!-- Simulation controls -->
-  <div class="sim-controls">
-    <button class="btn btn-primary" id="btnRunNormal" onclick="runSimulation('success')">▶ Run Pipeline (Success)</button>
-    <span class="sim-label">— or inject a failure:</span>
-    <button class="btn btn-danger" id="btnRunFail" onclick="runSimulation('failure')">💥 Fail at Synthesis</button>
-    <button class="btn btn-ghost" onclick="resetSim()">↺ Reset</button>
-  </div>
-
-  <!-- Pipeline steps -->
-  <div class="pipeline-flow" id="pipelineFlow">
-    <div class="pipeline-step-wrap">
-      <div class="pipeline-step step-planning" id="step-1">
-        <div class="step-num">Step 1</div>
-        <div class="step-name">Planning</div>
-        <div class="step-type">capture_llm_call</div>
-      </div>
-    </div>
-    <div class="pipeline-arrow">→</div>
-    <div class="pipeline-step-wrap">
-      <div class="pipeline-step step-search" id="step-2">
-        <div class="step-num">Step 2</div>
-        <div class="step-name">Web Search</div>
-        <div class="step-type">capture_tool_call</div>
-      </div>
-    </div>
-    <div class="pipeline-arrow">→</div>
-    <div class="pipeline-step-wrap">
-      <div class="pipeline-step step-retrieval" id="step-3">
-        <div class="step-num">Step 3</div>
-        <div class="step-name">Retrieval</div>
-        <div class="step-type">capture_step</div>
-      </div>
-    </div>
-    <div class="pipeline-arrow">→</div>
-    <div class="pipeline-step-wrap">
-      <div class="pipeline-step step-memory" id="step-4">
-        <div class="step-num">Step 4</div>
-        <div class="step-name">Memory Write</div>
-        <div class="step-type">capture_step</div>
-      </div>
-    </div>
-    <div class="pipeline-arrow">→</div>
-    <div class="pipeline-step-wrap">
-      <div class="pipeline-step step-synthesis" id="step-5">
-        <div class="step-num">Step 5</div>
-        <div class="step-name">Synthesis</div>
-        <div class="step-type">capture_llm_call</div>
-      </div>
-    </div>
-    <div class="pipeline-arrow">→</div>
-    <div class="pipeline-step-wrap">
-      <div class="pipeline-step step-final" id="step-6">
-        <div class="step-num">Step 6</div>
-        <div class="step-name">Final Response</div>
-        <div class="step-type">capture_step</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Trace output panel -->
-  <div class="trace-panel" id="tracePanel">
-    <h4>📋 Live Trace Events</h4>
-    <div id="traceEvents"></div>
-    <div class="trace-placeholder" id="tracePlaceholder">
-      <div class="ph-icon">🔭</div>
-      <div>Click "Run Pipeline" to see live events appear here</div>
-    </div>
+  <div class="env-wrap">
+    <table class="env-table">
+      <thead>
+        <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>GEMINI_API_KEY</td>
+          <td>—</td>
+          <td>Your Google Gemini API key. Required for the live research agent. Without it the agent runs in offline-fallback simulation mode.</td>
+        </tr>
+        <tr>
+          <td>GEMINI_MODEL</td>
+          <td>gemini-2.5-flash</td>
+          <td>Gemini model to use. Can be changed to any available model ID.</td>
+        </tr>
+        <tr>
+          <td>AGENTLENS_STORAGE</td>
+          <td>memory</td>
+          <td>Storage backend. <code>memory</code> = fast in-memory (all tests). <code>sqlite</code> = persistent SQLite (run_demo.py). Default keeps all pytest tests green.</td>
+        </tr>
+        <tr>
+          <td>AGENTLENS_DB_PATH</td>
+          <td>./agentlens.db</td>
+          <td>Path to the SQLite file. Only used when <code>AGENTLENS_STORAGE=sqlite</code>. Will be created automatically on first run.</td>
+        </tr>
+        <tr>
+          <td>PORT</td>
+          <td>8000</td>
+          <td>TCP port for the FastAPI / Uvicorn server. Auto-increments if the port is already in use.</td>
+        </tr>
+        <tr>
+          <td>CORS_ORIGINS</td>
+          <td>*</td>
+          <td>Allowed CORS origins for the REST API. Set to your frontend URL in production.</td>
+        </tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
-<!-- ══════════════════════ SDK WRAPPERS ══════════════════════ -->
-<div class="page section" id="wrappers">
-  <div class="section-label">04 — New SDK Helpers</div>
-  <div class="section-title">Automatic Failure Capture Wrappers</div>
-  <p class="section-desc">Three async context managers added to <code>EventCollector</code>. Each one times the operation, records the right event type, and — on exception — captures <code>exception_type + exception_message</code> before re-raising.</p>
+<!-- ═══════════════════════ TESTING ═══════════════════════ -->
+<div class="page section" id="testing">
+  <div class="section-label">07 — Testing</div>
+  <div class="section-title">How to Run Everything</div>
+  <p class="section-desc">Run these commands from the <code>agentlens/</code> directory.</p>
 
-  <div class="wrappers-grid">
+  <div class="cmd-list">
 
-    <!-- capture_llm_call -->
-    <div class="card wrapper-card">
-      <h3 style="color:var(--green)">capture_llm_call()</h3>
-      <div class="wr-desc">Wraps a Gemini (or any LLM) call. Yields a <code>result[0]</code> list to populate with the response.</div>
-
-      <div class="flow-row flow-enter">
-        <div class="flow-icon">⏱️</div>
-        <div class="flow-text">Start timer · set up <code>result = [""]</code></div>
-      </div>
-      <div class="flow-arrow-down">▼</div>
-      <div class="flow-row flow-work">
-        <div class="flow-icon">🤖</div>
-        <div class="flow-text"><strong>Body runs</strong> — call Gemini, assign <code>result[0] = response</code></div>
-      </div>
-      <div class="flow-arrow-down">▼&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;↓ (on exception)</div>
-      <div style="display:flex;gap:8px">
-        <div class="flow-row flow-success" style="flex:1">
-          <div class="flow-icon">✅</div>
-          <div class="flow-text">Record <strong>LLM_CALL / SUCCESS</strong><br/>prompt + response in event</div>
-        </div>
-        <div class="flow-row flow-failure" style="flex:1">
-          <div class="flow-icon">❌</div>
-          <div class="flow-text">Record <strong>LLM_CALL / FAILURE</strong><br/>exception_type + message → re-raise</div>
-        </div>
-      </div>
-
-      <div class="code-block">
-<span class="kw">async with</span> collector.<span class="fn">capture_llm_call</span>(<br/>
-&nbsp;&nbsp;prompt=<span class="str">"Synthesize findings"</span>,<br/>
-&nbsp;&nbsp;model=<span class="str">"gemini-2.5-flash"</span>,<br/>
-&nbsp;&nbsp;metadata={<span class="str">"step"</span>: <span class="str">"synthesis"</span>},<br/>
-&nbsp;&nbsp;retry_of=failed_id,  <span class="cm"># optional</span><br/>
-&nbsp;&nbsp;attempt=<span class="val">2</span>,           <span class="cm"># optional</span><br/>
-) <span class="kw">as</span> result:<br/>
-&nbsp;&nbsp;result[<span class="val">0</span>] = <span class="kw">await</span> <span class="fn">call_gemini</span>(prompt)<br/>
-answer = result[<span class="val">0</span>]
-      </div>
+    <div class="cmd-item">
+      <div class="cmd-label">Install / update dependencies</div>
+      <div class="cmd-code">pip install -e ".[dev]"</div>
+      <div class="cmd-desc">Installs the package in editable mode + all dev dependencies including aiosqlite, pytest, pytest-asyncio.</div>
     </div>
 
-    <!-- capture_tool_call -->
-    <div class="card wrapper-card">
-      <h3 style="color:var(--cyan)">capture_tool_call()</h3>
-      <div class="wr-desc">Wraps any tool invocation (web search, DB query, etc.). Yields a <code>result[0]</code> list to populate with the output dict.</div>
-
-      <div class="flow-row flow-enter">
-        <div class="flow-icon">⏱️</div>
-        <div class="flow-text">Start timer · set up <code>result = [None]</code></div>
-      </div>
-      <div class="flow-arrow-down">▼</div>
-      <div class="flow-row flow-work">
-        <div class="flow-icon">🔧</div>
-        <div class="flow-text"><strong>Body runs</strong> — call tool, assign <code>result[0] = {"hits": [...]}</code></div>
-      </div>
-      <div class="flow-arrow-down">▼&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;↓ (on exception)</div>
-      <div style="display:flex;gap:8px">
-        <div class="flow-row flow-success" style="flex:1">
-          <div class="flow-icon">✅</div>
-          <div class="flow-text">Record <strong>TOOL_CALL / SUCCESS</strong><br/>input + output in event</div>
-        </div>
-        <div class="flow-row flow-failure" style="flex:1">
-          <div class="flow-icon">❌</div>
-          <div class="flow-text">Record <strong>TOOL_CALL / FAILURE</strong><br/>exception_type + message → re-raise</div>
-        </div>
-      </div>
-
-      <div class="code-block">
-<span class="kw">async with</span> collector.<span class="fn">capture_tool_call</span>(<br/>
-&nbsp;&nbsp;<span class="str">"web_search"</span>,<br/>
-&nbsp;&nbsp;input_data={<span class="str">"query"</span>: q},<br/>
-&nbsp;&nbsp;metadata={<span class="str">"step"</span>: <span class="str">"search"</span>},<br/>
-) <span class="kw">as</span> result:<br/>
-&nbsp;&nbsp;result[<span class="val">0</span>] = <span class="kw">await</span> <span class="fn">web_search</span>(q)<br/>
-hits = result[<span class="val">0</span>]
-      </div>
+    <div class="cmd-item">
+      <div class="cmd-label">Run storage unit tests (29 tests — should always be green)</div>
+      <div class="cmd-code">python -m pytest tests/test_storage.py -v</div>
+      <div class="cmd-desc">Uses the in-memory backend. No env vars needed. Should show 29 passed in &lt;1 second.</div>
     </div>
 
-    <!-- capture_step -->
-    <div class="card wrapper-card">
-      <h3 style="color:var(--teal)">capture_step()</h3>
-      <div class="wr-desc">Generic wrapper for any pipeline step that doesn't return a value (retrieval, memory-write, final-response bookend).</div>
-
-      <div class="flow-row flow-enter">
-        <div class="flow-icon">⏱️</div>
-        <div class="flow-text">Start timer · note event_type</div>
-      </div>
-      <div class="flow-arrow-down">▼</div>
-      <div class="flow-row flow-work">
-        <div class="flow-icon">⚙️</div>
-        <div class="flow-text"><strong>Body runs</strong> — any arbitrary async work</div>
-      </div>
-      <div class="flow-arrow-down">▼&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;↓ (on exception)</div>
-      <div style="display:flex;gap:8px">
-        <div class="flow-row flow-success" style="flex:1">
-          <div class="flow-icon">✅</div>
-          <div class="flow-text">Record <strong>EventType / SUCCESS</strong><br/>+ latency_ms</div>
-        </div>
-        <div class="flow-row flow-failure" style="flex:1">
-          <div class="flow-icon">❌</div>
-          <div class="flow-text">Record <strong>EventType / FAILURE</strong><br/>exception_type + message → re-raise</div>
-        </div>
-      </div>
-
-      <div class="code-block">
-<span class="kw">async with</span> collector.<span class="fn">capture_step</span>(<br/>
-&nbsp;&nbsp;EventType.RETRIEVAL,<br/>
-&nbsp;&nbsp;input_data={<span class="str">"top_k"</span>: <span class="val">3</span>},<br/>
-&nbsp;&nbsp;metadata={<span class="str">"step"</span>: <span class="str">"retrieval"</span>},<br/>
-&nbsp;&nbsp;retry_of=failed_id,  <span class="cm"># optional</span><br/>
-&nbsp;&nbsp;attempt=<span class="val">2</span>,<br/>
-):<br/>
-&nbsp;&nbsp;<span class="kw">pass</span>  <span class="cm"># or real work here</span>
-      </div>
+    <div class="cmd-item">
+      <div class="cmd-label">Run the SQLite smoke test (new in Phase 7)</div>
+      <div class="cmd-code">python tests/smoke_sqlite.py</div>
+      <div class="cmd-desc">Creates a temp SQLite DB, applies migrations, tests event round-trip, ordering, bulk-save, trace CRUD, count_traces, and keyset pagination. Should print 6 [OK] lines.</div>
     </div>
+
+    <div class="cmd-item">
+      <div class="cmd-label">Run all tests</div>
+      <div class="cmd-code">python -m pytest -v --tb=short</div>
+      <div class="cmd-desc">Runs the full test suite. All existing tests use memory backend so they stay fast and green.</div>
+    </div>
+
+    <div class="cmd-item">
+      <div class="cmd-label">Run the live demo (uses SQLite)</div>
+      <div class="cmd-code">python run_demo.py</div>
+      <div class="cmd-desc">Starts Uvicorn on port 8000, opens the dashboard at http://127.0.0.1:8000/app/, uses SQLite persistence. Database file: ./agentlens.db</div>
+    </div>
+
+    <div class="cmd-item">
+      <div class="cmd-label">Run demo on a specific port</div>
+      <div class="cmd-code">python run_demo.py --port 9000 --no-browser</div>
+      <div class="cmd-desc">Run without auto-opening the browser. Useful for server/headless environments.</div>
+    </div>
+
+    <div class="cmd-item">
+      <div class="cmd-label">Check the SQLite database directly</div>
+      <div class="cmd-code">python -c "import sqlite3, pprint; db=sqlite3.connect('agentlens.db'); pprint.pprint(db.execute('SELECT trace_id,agent_id,status,event_count FROM traces LIMIT 5').fetchall())"</div>
+      <div class="cmd-desc">Quick sanity check — list the 5 most recent traces directly from SQLite (after running the demo).</div>
+    </div>
+
+    <div class="cmd-item">
+      <div class="cmd-label">Commit Phase 7 to your branch</div>
+      <div class="cmd-code">git commit -m "feat(storage): async SQLite backend, migrations, keyset pagination, memory parity"</div>
+      <div class="cmd-desc">All Phase 7 files are already staged (<code>git add</code> was done). This is the final commit command.</div>
+    </div>
+
   </div>
 </div>
 
-<!-- ══════════════════════ RETRY LINKAGE ══════════════════════ -->
-<div class="page section" id="retry">
-  <div class="section-label">05 — Retry Linkage</div>
-  <div class="section-title">Tracing Retry Chains</div>
-  <p class="section-desc">When a step fails and is retried, the new event's <code>metadata</code> carries <code>retry_of</code> (UUID of the failed event) and an incremented <code>attempt</code> counter — letting you reconstruct the full retry chain from the trace.</p>
-
-  <div class="retry-diagram">
-    <div class="retry-row">
-      <div class="retry-attempt att-fail">
-        <div class="att-num">❌ Attempt 1 — FAILURE</div>
-        <div class="att-name">LLM_CALL / synthesis</div>
-        <div class="att-meta">event_id: a1b2c3d4…<br/>metadata.exception_type: "RuntimeError"<br/>metadata.exception_message: "Gemini quota exceeded"</div>
-      </div>
-    </div>
-
-    <div style="display:flex;align-items:center;gap:12px;margin:0 0 16px 24px;color:var(--orange)">
-      <div style="font-size:1.4rem">↓</div>
-      <div style="font-size:0.82rem;font-family:'JetBrains Mono',monospace">retry_of = "a1b2c3d4…" &nbsp;·&nbsp; attempt = 2</div>
-    </div>
-
-    <div class="retry-row">
-      <div class="retry-attempt att-retry">
-        <div class="att-num">🔄 Attempt 2 — FAILURE</div>
-        <div class="att-name">LLM_CALL / synthesis (retry)</div>
-        <div class="att-meta">event_id: e5f6a7b8…<br/>metadata.retry_of: "a1b2c3d4…" (→ attempt 1)<br/>metadata.attempt: 2<br/>metadata.exception_type: "TimeoutError"</div>
-      </div>
-    </div>
-
-    <div style="display:flex;align-items:center;gap:12px;margin:0 0 16px 24px;color:var(--orange)">
-      <div style="font-size:1.4rem">↓</div>
-      <div style="font-size:0.82rem;font-family:'JetBrains Mono',monospace">retry_of = "e5f6a7b8…" &nbsp;·&nbsp; attempt = 3</div>
-    </div>
-
-    <div class="retry-row">
-      <div class="retry-attempt att-success">
-        <div class="att-num">✅ Attempt 3 — SUCCESS</div>
-        <div class="att-name">LLM_CALL / synthesis (retry)</div>
-        <div class="att-meta">event_id: c9d0e1f2…<br/>metadata.retry_of: "e5f6a7b8…" (→ attempt 2)<br/>metadata.attempt: 3<br/>output_data.response: "The evidence suggests…"</div>
-      </div>
-    </div>
-  </div>
+<!-- Footer -->
+<div class="page">
+  <footer>
+    <div style="margin-bottom:8px; font-size:0.85rem; color:var(--text-muted)">AgentLens — Final Year Project</div>
+    <div>Phase 7 complete · 29/29 unit tests passing · SQLite backend operational</div>
+    <div style="margin-top:6px">branch: <code style="color:var(--cyan)">feature/database-backend</code></div>
+  </footer>
 </div>
-
-<!-- ══════════════════════ ACCEPTANCE CRITERIA ══════════════════════ -->
-<div class="page section">
-  <div class="section-label">06 — Acceptance Criteria</div>
-  <div class="section-title">All Criteria Met ✅</div>
-  <p class="section-desc">The four requirements from the task — verified by 18 new tests.</p>
-
-  <ul class="criteria-list">
-    <li class="criteria-item">
-      <div class="criteria-check">✅</div>
-      <div>
-        <h4>Reusable SDK wrappers added</h4>
-        <p><code>capture_llm_call()</code>, <code>capture_tool_call()</code>, and <code>capture_step()</code> added to <code>EventCollector</code> in <code>sdk_collector/collector.py</code>. Each times execution, records SUCCESS on clean exit, and records FAILURE with <code>exception_type + exception_message</code> on error before re-raising.</p>
-      </div>
-    </li>
-    <li class="criteria-item">
-      <div class="criteria-check">✅</div>
-      <div>
-        <h4>_AgentRunner.run() refactored — per-step capture</h4>
-        <p>All 6 pipeline steps (planning, search, retrieval, memory-write, synthesis, final-response) are now routed through the per-step wrappers. The single coarse <code>try/except</code> was replaced — each step has its own capture context manager.</p>
-      </div>
-    </li>
-    <li class="criteria-item">
-      <div class="criteria-check">✅</div>
-      <div>
-        <h4>Retry linkage</h4>
-        <p>All three wrappers accept <code>retry_of: Optional[UUID]</code> and <code>attempt: int</code>. When provided, both are serialized into the recorded event's <code>metadata</code> dict — linking the retry to its predecessor regardless of whether the retry succeeded or failed.</p>
-      </div>
-    </li>
-    <li class="criteria-item">
-      <div class="criteria-check">✅</div>
-      <div>
-        <h4>Acceptance test: killing Gemini mid-run persists exactly 1 FAILURE event</h4>
-        <p>Verified by <code>TestPipelineFailureCapture::test_gemini_failure_persists_failure_trace</code>: when Gemini raises during synthesis, the stored trace contains exactly one FAILURE event of type <code>LLM_CALL</code> with <code>exception_type = "RuntimeError"</code> and <code>exception_message = "Gemini quota exceeded"</code>. All 172 tests pass.</p>
-      </div>
-    </li>
-  </ul>
-</div>
-
-<footer>
-  AgentLens · Final Year Project · Vyankatesh · 2026
-</footer>
 
 <script>
-  // ── Stars ──────────────────────────────────────────────────────────
-  (function(){
-    const container = document.getElementById('stars');
-    for(let i=0;i<120;i++){
-      const s = document.createElement('div');
-      s.className = 'star';
-      const size = Math.random()*2+0.5;
-      s.style.cssText = `
-        width:${size}px;height:${size}px;
-        top:${Math.random()*100}%;left:${Math.random()*100}%;
-        --d:${2+Math.random()*4}s;
-        --o:${0.3+Math.random()*0.6};
-        animation-delay:${Math.random()*5}s;
-      `;
-      container.appendChild(s);
-    }
-  })();
+  // ── Stars ──
+  const starsEl = document.getElementById('stars');
+  for (let i = 0; i < 120; i++) {
+    const s = document.createElement('div');
+    s.className = 'star';
+    const size = Math.random() * 2.5 + 0.5;
+    s.style.cssText = `
+      width:${size}px; height:${size}px;
+      left:${Math.random()*100}%;
+      top:${Math.random()*100}%;
+      --d:${(Math.random()*5+2).toFixed(1)}s;
+      --o:${(Math.random()*0.5+0.1).toFixed(2)};
+      animation-delay:${(Math.random()*6).toFixed(1)}s;
+    `;
+    starsEl.appendChild(s);
+  }
 
-  // ── Pipeline Simulation ────────────────────────────────────────────
-  const STEPS = [
-    { id:'step-1', name:'Planning',       type:'LLM_CALL',      wrapper:'capture_llm_call', step:'planning'      },
-    { id:'step-2', name:'Web Search',     type:'TOOL_CALL',     wrapper:'capture_tool_call',step:'search'        },
-    { id:'step-3', name:'Retrieval',      type:'RETRIEVAL',     wrapper:'capture_step',     step:'retrieval'     },
-    { id:'step-4', name:'Memory Write',   type:'MEMORY_WRITE',  wrapper:'capture_step',     step:'memory-write'  },
-    { id:'step-5', name:'Synthesis',      type:'LLM_CALL',      wrapper:'capture_llm_call', step:'synthesis'     },
-    { id:'step-6', name:'Final Response', type:'FINAL_RESPONSE', wrapper:'capture_step',    step:'final-response'}
-  ];
-
-  let running = false;
-
-  function resetSim(){
-    running = false;
-    STEPS.forEach(s=>{
-      const el = document.getElementById(s.id);
-      el.classList.remove('step-success','step-failure','step-running');
-      // Remove dynamic badges
-      const b = el.querySelector('.step-badge');
-      if(b) b.remove();
+  // ── Smooth scroll for nav links ──
+  document.querySelectorAll('a[href^="#"]').forEach(a => {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      const t = document.querySelector(a.getAttribute('href'));
+      if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
-    document.getElementById('traceEvents').innerHTML = '';
-    document.getElementById('tracePlaceholder').style.opacity = '1';
-    document.getElementById('tracePlaceholder').style.pointerEvents = 'auto';
-    document.getElementById('btnRunNormal').disabled = false;
-    document.getElementById('btnRunFail').disabled = false;
-  }
+  });
 
-  function setBadge(stepEl, text, cls){
-    let b = stepEl.querySelector('.step-badge');
-    if(!b){ b = document.createElement('div'); b.className = 'step-badge'; stepEl.appendChild(b); }
-    b.textContent = text;
-    b.className = `step-badge ${cls}`;
-  }
-
-  function appendEvent(type, status, stepName, wrapper, extra){
-    document.getElementById('tracePlaceholder').style.opacity = '0';
-    document.getElementById('tracePlaceholder').style.pointerEvents = 'none';
-    const container = document.getElementById('traceEvents');
-    const el = document.createElement('div');
-    const isF = status === 'FAILURE';
-    const isR = status === 'RUNNING';
-    el.className = `trace-event ${isF?'ev-failure':isR?'ev-running':'ev-success'}`;
-    el.innerHTML = `
-      <div class="ev-dot ${isF?'ev-dot-f':isR?'ev-dot-r':'ev-dot-s'}"></div>
-      <div>
-        <span class="ev-type">${type}</span>
-        &nbsp;<span class="${isF?'ev-status-f':'ev-status-s'}">[${status}]</span>
-        &nbsp;<span style="color:var(--text-muted);font-size:0.72rem">via ${wrapper}</span>
-        <div class="ev-meta">step: ${stepName}${extra?'':''}</div>
-        ${extra?`<div class="ev-error">${extra}</div>`:''}
-      </div>`;
-    container.appendChild(el);
-    el.scrollIntoView({behavior:'smooth',block:'nearest'});
-    return el;
-  }
-
-  async function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
-
-  async function runSimulation(mode){
-    if(running) return;
-    running = true;
-    resetSim();
-    await sleep(50);
-    running = true;
-    document.getElementById('btnRunNormal').disabled = true;
-    document.getElementById('btnRunFail').disabled = true;
-
-    const failAt = mode === 'failure' ? 5 : -1; // fail at step index 4 (synthesis)
-
-    for(let i=0;i<STEPS.length;i++){
-      if(!running) break;
-      const step = STEPS[i];
-      const el = document.getElementById(step.id);
-
-      // Running state
-      el.classList.add('step-running');
-      setBadge(el,'⏱ Running…','badge-running');
-      const evEl = appendEvent(step.type,'RUNNING',step.name,step.wrapper);
-      await sleep(400 + Math.random()*300);
-
-      el.classList.remove('step-running');
-      evEl.remove();
-
-      if(i === failAt - 1){
-        // Inject failure
-        el.classList.add('step-failure');
-        setBadge(el,'❌ FAILURE','badge-failure');
-        appendEvent(step.type,'FAILURE',step.name,step.wrapper,
-          '⚠ exception_type: "RuntimeError"  ·  exception_message: "Gemini quota exceeded"');
-        // Skip remaining steps — show them greyed
-        for(let j=i+1;j<STEPS.length;j++){
-          const se = document.getElementById(STEPS[j].id);
-          se.style.opacity = '0.35';
-        }
-        await sleep(200);
-        // Show trace summary
-        const container = document.getElementById('traceEvents');
-        const summary = document.createElement('div');
-        summary.style.cssText = 'margin-top:12px;padding:10px 14px;border-radius:8px;background:rgba(252,129,129,0.07);border:1px solid rgba(252,129,129,0.3);font-size:0.78rem;color:var(--red)';
-        summary.innerHTML = `<strong>🔴 Trace finalized as FAILURE</strong><br/>
-          Exactly 1 FAILURE event in trace with exception_type + exception_message.<br/>
-          Steps 1–4 keep their SUCCESS status. The outer except only calls end_trace().`;
-        container.appendChild(summary);
-        break;
-      } else {
-        // Success
-        el.classList.add('step-success');
-        el.style.opacity = '1';
-        setBadge(el,'✅ SUCCESS','badge-success');
-        appendEvent(step.type,'SUCCESS',step.name,step.wrapper);
-        await sleep(150);
-      }
-    }
-
-    if(mode === 'success'){
-      const container = document.getElementById('traceEvents');
-      const summary = document.createElement('div');
-      summary.style.cssText = 'margin-top:12px;padding:10px 14px;border-radius:8px;background:rgba(72,187,120,0.07);border:1px solid rgba(72,187,120,0.3);font-size:0.78rem;color:var(--green)';
-      summary.innerHTML = `<strong>🟢 Trace finalized as SUCCESS</strong><br/>
-        All 6 steps completed. 0 FAILURE events in trace. Pipeline persisted to TraceStore.`;
-      container.appendChild(summary);
-    }
-
-    document.getElementById('btnRunNormal').disabled = false;
-    document.getElementById('btnRunFail').disabled = false;
-    running = false;
-  }
+  // ── Flow step hover glow colours ──
+  const stepColors = [
+    'var(--purple)', 'var(--cyan)', 'var(--purple)',
+    'var(--red)', 'var(--teal)', 'var(--orange)',
+    'var(--green)', 'var(--cyan)'
+  ];
+  document.querySelectorAll('.flow-step').forEach((el, i) => {
+    const c = stepColors[i % stepColors.length];
+    el.addEventListener('mouseenter', () => { el.style.boxShadow = `0 0 22px ${c}55`; });
+    el.addEventListener('mouseleave', () => { el.style.boxShadow = ''; });
+  });
 </script>
 </body>
 </html>
