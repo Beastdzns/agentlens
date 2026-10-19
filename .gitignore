@@ -152,6 +152,7 @@ output/
 # Internal
 TEAM_PLANS.md
 report.md
+work.md
 
 # Frontend
 frontend/node_modules/
