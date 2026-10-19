@@ -49,7 +49,7 @@ from agentlens.storage import (
     SqliteEventStore,
     SqliteTraceStore,
     init_db,
-    get_database,
+    close_database,
 )
 
 load_dotenv()
@@ -73,7 +73,11 @@ async def lifespan(app):  # noqa: ANN001
         event_store, trace_store = SqliteEventStore(db), SqliteTraceStore(db)
     yield
     if _backend() == "sqlite":
-        await get_database().close()
+        # Close *and reset* the singleton so a later start (or the next test)
+        # re-opens a fresh connection instead of reusing the closed one, then
+        # restore the shared default instances (preserving their identity).
+        await close_database()
+        event_store, trace_store = _default_event_store, _default_trace_store
 
 
 app = FastAPI(
@@ -146,6 +150,13 @@ async def root_redirect() -> dict[str, str]:
 
 event_store = InMemoryEventStore()
 trace_store = InMemoryTraceStore()
+
+# The shared default singletons.  The lifespan swaps the globals to SQLite
+# stores while running and restores *these exact objects* on shutdown, so
+# modules that imported ``event_store`` / ``trace_store`` at import time keep
+# a valid reference (identity must be preserved across start/stop cycles).
+_default_event_store = event_store
+_default_trace_store = trace_store
 
 # ---------------------------------------------------------------------------
 # Valid filter value sets
@@ -663,11 +674,20 @@ async def list_traces(
             raise HTTPException(status_code=400, detail=f"Invalid status: {status}") from exc
 
     # -- Parse dates
-    def _parse_date(raw: str) -> datetime:
-        """Accept YYYY-MM-DD or ISO-8601; return UTC-aware datetime."""
+    from datetime import date as _date, time as _time
+
+    def _parse_date(raw: str, *, end_of_day: bool = False) -> datetime:
+        """Accept YYYY-MM-DD or ISO-8601; return a UTC-aware datetime.
+
+        A date-only value covers the whole day: ``start_date`` is anchored to
+        ``00:00:00`` and ``end_date`` to ``23:59:59.999999``.  This keeps
+        ``end_date=<today>`` inclusive of traces that started later today.
+        """
         try:
             if len(raw) == 10:
-                return datetime.fromisoformat(raw).replace(tzinfo=timezone.utc)
+                day = _date.fromisoformat(raw)
+                clock = _time(23, 59, 59, 999999) if end_of_day else _time(0, 0, 0)
+                return datetime.combine(day, clock, tzinfo=timezone.utc)
             dt = datetime.fromisoformat(raw)
             return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
         except ValueError as exc:
@@ -677,7 +697,7 @@ async def list_traces(
             ) from exc
 
     start_dt = _parse_date(start_date) if start_date is not None else None
-    end_dt = _parse_date(end_date) if end_date is not None else None
+    end_dt = _parse_date(end_date, end_of_day=True) if end_date is not None else None
 
     # -- Early cursor validation
     if cursor is not None:

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 AgentLens Phase 6 Demo Launcher
 ===============================
