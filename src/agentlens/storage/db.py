@@ -338,3 +338,22 @@ def get_database() -> Database:
             "Database not initialised. Call `await init_db()` before using get_database()."
         )
     return _db_instance
+
+
+async def close_database() -> None:
+    """
+    Close the global database singleton and reset it.
+
+    Idempotent: safe to call when nothing has been initialised, and safe to
+    call more than once.  After this call a subsequent :func:`init_db` will
+    open a **fresh** connection, which is required by the application
+    lifespan (start/stop within one process) and by tests that need an
+    isolated database per case.
+
+    Without the reset, :func:`init_db` would keep returning the closed
+    instance because its guard only checks ``_db_instance is not None``.
+    """
+    global _db_instance
+    if _db_instance is not None:
+        await _db_instance.close()
+        _db_instance = None

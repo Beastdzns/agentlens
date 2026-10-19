@@ -293,7 +293,12 @@ class SqliteTraceStore(TraceStore):
 
     async def get_trace(self, trace_id: UUID) -> Trace:
         """
-        Retrieve a single trace by UUID.
+        Retrieve a single trace by UUID, hydrating its events.
+
+        The ``traces`` table only stores the summary; the individual events
+        live in the ``events`` table.  This method reads both so the returned
+        :class:`~agentlens.events.Trace` is complete (matching the in-memory
+        store), with ``events`` ordered by ``timestamp``.
 
         Raises:
             KeyError: If no trace with ``trace_id`` exists.
@@ -303,7 +308,18 @@ class SqliteTraceStore(TraceStore):
         )
         if row is None:
             raise KeyError(f"Trace {trace_id!r} not found in store.")
-        return _row_to_trace(row)
+
+        trace = _row_to_trace(row)
+        event_rows = await self._db.fetch_all(
+            """
+            SELECT * FROM events
+            WHERE trace_id = ?
+            ORDER BY timestamp ASC, event_id ASC
+            """,
+            (str(trace_id),),
+        )
+        trace.events = [_row_to_event(r) for r in event_rows]
+        return trace
 
     async def list_traces(
         self,

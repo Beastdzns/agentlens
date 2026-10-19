@@ -26,13 +26,14 @@ Public API::
         SqliteTraceStore,
         init_db,
         get_database,
+        close_database,
     )
 """
 
 from agentlens.storage.base import EventStore, TraceStore
 from agentlens.storage.memory import InMemoryEventStore, InMemoryTraceStore
 from agentlens.storage.sqlite import SqliteEventStore, SqliteTraceStore
-from agentlens.storage.db import init_db, get_database
+from agentlens.storage.db import init_db, get_database, close_database
 
 __all__ = [
     # Abstractions
@@ -47,5 +48,6 @@ __all__ = [
     # Database lifecycle
     "init_db",
     "get_database",
+    "close_database",
 ]
 

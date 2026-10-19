@@ -40,7 +40,17 @@ from pydantic import BaseModel, Field, field_validator
 
 from agentlens.events import EventStatus, EventType, Trace
 from agentlens.sdk_collector import EventCollector
-from agentlens.storage import InMemoryEventStore, InMemoryTraceStore
+from contextlib import asynccontextmanager
+from agentlens.storage import (
+    EventStore,
+    TraceStore,
+    InMemoryEventStore,
+    InMemoryTraceStore,
+    SqliteEventStore,
+    SqliteTraceStore,
+    init_db,
+    close_database,
+)
 
 load_dotenv()
 
@@ -49,10 +59,32 @@ load_dotenv()
 # Application setup
 # ---------------------------------------------------------------------------
 
+def _backend() -> str:
+    """Return the configured storage backend ('memory' | 'sqlite')."""
+    return os.getenv("AGENTLENS_STORAGE", "memory").lower()
+
+
+@asynccontextmanager
+async def lifespan(app):  # noqa: ANN001
+    """Lifespan: wire up SQLite stores when AGENTLENS_STORAGE=sqlite."""
+    global event_store, trace_store
+    if _backend() == "sqlite":
+        db = await init_db()
+        event_store, trace_store = SqliteEventStore(db), SqliteTraceStore(db)
+    yield
+    if _backend() == "sqlite":
+        # Close *and reset* the singleton so a later start (or the next test)
+        # re-opens a fresh connection instead of reusing the closed one, then
+        # restore the shared default instances (preserving their identity).
+        await close_database()
+        event_store, trace_store = _default_event_store, _default_trace_store
+
+
 app = FastAPI(
     title="AgentLens API",
     description="HTTP interface for the AgentLens multi-step research agent.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 def _resolve_frontend_dir() -> Path | None:
@@ -118,6 +150,13 @@ async def root_redirect() -> dict[str, str]:
 
 event_store = InMemoryEventStore()
 trace_store = InMemoryTraceStore()
+
+# The shared default singletons.  The lifespan swaps the globals to SQLite
+# stores while running and restores *these exact objects* on shutdown, so
+# modules that imported ``event_store`` / ``trace_store`` at import time keep
+# a valid reference (identity must be preserved across start/stop cycles).
+_default_event_store = event_store
+_default_trace_store = trace_store
 
 # ---------------------------------------------------------------------------
 # Valid filter value sets
@@ -195,6 +234,28 @@ class TraceResponse(BaseModel):
     events: list[SerializedEvent]
 
 
+
+class TraceSummary(BaseModel):
+    """Lightweight summary returned by ``GET /api/traces``."""
+
+    trace_id: str
+    agent_id: Optional[str] = None
+    status: str
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    event_count: int = 0
+    total_latency_ms: float = 0.0
+    metadata: Optional[dict[str, Any]] = None
+
+
+class TraceListResponse(BaseModel):
+    """Body returned by ``GET /api/traces``."""
+
+    items: list[TraceSummary]
+    count: int
+    next_cursor: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Agent runner (encapsulates the multi-step workflow)
 # ---------------------------------------------------------------------------
@@ -205,8 +266,8 @@ class _AgentRunner:
 
     def __init__(
         self,
-        ev_store: InMemoryEventStore,
-        tr_store: InMemoryTraceStore,
+        ev_store: EventStore,
+        tr_store: TraceStore,
     ) -> None:
         self._event_store = ev_store
         self._trace_store = tr_store
@@ -569,6 +630,126 @@ async def run_agent(body: RunRequest) -> RunResponse:
         events=[_serialize_event(e, children_map) for e in trace.events],
         total_latency_ms=trace.total_latency_ms,
         status="success",
+    )
+
+
+@app.get("/api/traces", response_model=TraceListResponse, tags=["traces"])
+async def list_traces(
+    agent_id: Optional[str] = Query(default=None, description="Filter by agent ID."),
+    status: Optional[str] = Query(
+        default=None,
+        description="Filter by status (all | success | failure | partial | pending).",
+    ),
+    start_date: Optional[str] = Query(
+        default=None,
+        description="Earliest start_time (YYYY-MM-DD or ISO-8601).",
+    ),
+    end_date: Optional[str] = Query(
+        default=None,
+        description="Latest start_time (YYYY-MM-DD or ISO-8601).",
+    ),
+    limit: int = Query(default=20, ge=1, le=100, description="Page size."),
+    cursor: Optional[str] = Query(
+        default=None,
+        description="Keyset pagination cursor from a previous response.",
+    ),
+) -> TraceListResponse:
+    """Return a paginated, filtered list of stored traces (no event payloads)."""
+    from datetime import datetime, timezone
+
+    # -- Validate status
+    status_enum = None
+    if status is not None and status != "all":
+        if status not in _VALID_STATUS_FILTERS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid status filter {status!r}. "
+                    f"Supported values: {sorted(_VALID_STATUS_FILTERS)}"
+                ),
+            )
+        try:
+            status_enum = EventStatus(status)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid status: {status}") from exc
+
+    # -- Parse dates
+    from datetime import date as _date, time as _time
+
+    def _parse_date(raw: str, *, end_of_day: bool = False) -> datetime:
+        """Accept YYYY-MM-DD or ISO-8601; return a UTC-aware datetime.
+
+        A date-only value covers the whole day: ``start_date`` is anchored to
+        ``00:00:00`` and ``end_date`` to ``23:59:59.999999``.  This keeps
+        ``end_date=<today>`` inclusive of traces that started later today.
+        """
+        try:
+            if len(raw) == 10:
+                day = _date.fromisoformat(raw)
+                clock = _time(23, 59, 59, 999999) if end_of_day else _time(0, 0, 0)
+                return datetime.combine(day, clock, tzinfo=timezone.utc)
+            dt = datetime.fromisoformat(raw)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date format {raw!r}. Use YYYY-MM-DD or ISO-8601.",
+            ) from exc
+
+    start_dt = _parse_date(start_date) if start_date is not None else None
+    end_dt = _parse_date(end_date, end_of_day=True) if end_date is not None else None
+
+    # -- Early cursor validation
+    if cursor is not None:
+        import base64 as _b64
+        try:
+            decoded = _b64.urlsafe_b64decode(cursor.encode()).decode()
+            if "|" not in decoded:
+                raise ValueError("missing separator")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Malformed pagination cursor.") from exc
+
+    # -- Storage calls
+    try:
+        items, next_cursor = await trace_store.list_trace_page(
+            limit=limit,
+            agent_id=agent_id,
+            status=status_enum,
+            start_date=start_dt,
+            end_date=end_dt,
+            cursor=cursor,
+        )
+        total = await trace_store.count_traces(
+            agent_id=agent_id,
+            status=status_enum,
+            start_date=start_dt,
+            end_date=end_dt,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Storage error: {exc}") from exc
+
+    # -- Build summaries
+    def _to_summary(t: Any) -> TraceSummary:
+        st = t.status.value if hasattr(t.status, "value") else str(t.status)
+        start = t.start_time.isoformat() if t.start_time else None
+        end = t.end_time.isoformat() if t.end_time else None
+        return TraceSummary(
+            trace_id=str(t.trace_id),
+            agent_id=t.agent_id,
+            status=st,
+            start_time=start,
+            end_time=end,
+            event_count=getattr(t, "event_count", 0),
+            total_latency_ms=t.total_latency_ms or 0.0,
+            metadata=getattr(t, "metadata", None),
+        )
+
+    return TraceListResponse(
+        items=[_to_summary(t) for t in items],
+        count=total,
+        next_cursor=next_cursor,
     )
 
 

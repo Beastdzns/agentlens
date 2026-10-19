@@ -88,6 +88,10 @@ def main() -> None:
         except Exception:
             pass
 
+    # Persist traces across restarts when running the live demo server.
+    # Tests stay memory-backed (they never set AGENTLENS_STORAGE=sqlite).
+    os.environ.setdefault("AGENTLENS_STORAGE", "sqlite")
+
     import uvicorn
 
     uvicorn.run("agentlens.web_api:app", host=args.host, port=port, reload=False)
