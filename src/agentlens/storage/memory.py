@@ -388,6 +388,119 @@ class InMemoryTraceStore(TraceStore):
         traces.sort(key=lambda t: t.start_time, reverse=True)
         return traces[:limit]
 
+    async def list_trace_page(
+        self,
+        *,
+        limit: int = 20,
+        agent_id: Optional[str] = None,
+        status: Optional[EventStatus] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        cursor: Optional[str] = None,
+    ) -> tuple[list[Trace], Optional[str]]:
+        """
+        Return a page of traces using in-memory keyset-style cursor pagination.
+
+        The cursor encodes ``(start_time ISO string, trace_id string)`` in the
+        same format as :class:`~agentlens.storage.sqlite.SqliteTraceStore` so
+        that tests can exercise both backends with identical logic.
+
+        Args:
+            limit:      Page size (default 20).
+            agent_id:   Optional agent filter.
+            status:     Optional status filter.
+            start_date: Include only traces whose ``start_time >= start_date``.
+            end_date:   Include only traces whose ``start_time <= end_date``.
+            cursor:     Opaque continuation token from a previous call.
+
+        Returns:
+            ``(traces, next_cursor)`` where ``next_cursor`` is ``None`` when
+            there are no more results.
+        """
+        import base64  # local import to avoid circular at module level
+
+        async with self._lock:
+            all_traces = list(self._traces.values())
+
+        # --- filter ---
+        if agent_id is not None:
+            all_traces = [t for t in all_traces if t.agent_id == agent_id]
+        if status is not None:
+            all_traces = [t for t in all_traces if t.status == status]
+        if start_date is not None:
+            # Make start_date timezone-aware for comparison
+            sd = start_date if start_date.tzinfo else start_date.replace(tzinfo=timezone.utc)
+            all_traces = [t for t in all_traces if t.start_time >= sd]
+        if end_date is not None:
+            ed = end_date if end_date.tzinfo else end_date.replace(tzinfo=timezone.utc)
+            all_traces = [t for t in all_traces if t.start_time <= ed]
+
+        # --- keyset cursor ---
+        if cursor is not None:
+            raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+            cursor_st_str, cursor_tid = raw.rsplit("|", 1)
+            cursor_st = datetime.fromisoformat(cursor_st_str)
+            if cursor_st.tzinfo is None:
+                cursor_st = cursor_st.replace(tzinfo=timezone.utc)
+            # keep only rows that come *after* the cursor in DESC order
+            # i.e. (start_time, trace_id) < (cursor_st, cursor_tid)
+            all_traces = [
+                t for t in all_traces
+                if (t.start_time, str(t.trace_id)) < (cursor_st, cursor_tid)
+            ]
+
+        # --- sort descending ---
+        all_traces.sort(key=lambda t: (t.start_time, str(t.trace_id)), reverse=True)
+
+        # --- paginate ---
+        has_next = len(all_traces) > limit
+        page = all_traces[:limit]
+
+        next_cursor: Optional[str] = None
+        if has_next and page:
+            last = page[-1]
+            st_str = last.start_time.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+            raw_cursor = f"{st_str}|{last.trace_id}"
+            next_cursor = base64.urlsafe_b64encode(raw_cursor.encode()).decode()
+
+        return page, next_cursor
+
+    async def count_traces(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+        status: Optional[EventStatus] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> int:
+        """
+        Return the total number of traces matching the given filters.
+
+        Args:
+            agent_id:   Optional agent filter.
+            status:     Optional status filter.
+            start_date: Minimum ``start_time`` (inclusive).
+            end_date:   Maximum ``start_time`` (inclusive).
+
+        Returns:
+            Integer count.
+        """
+        async with self._lock:
+            traces = list(self._traces.values())
+
+        if agent_id is not None:
+            traces = [t for t in traces if t.agent_id == agent_id]
+        if status is not None:
+            traces = [t for t in traces if t.status == status]
+        if start_date is not None:
+            sd = start_date if start_date.tzinfo else start_date.replace(tzinfo=timezone.utc)
+            traces = [t for t in traces if t.start_time >= sd]
+        if end_date is not None:
+            ed = end_date if end_date.tzinfo else end_date.replace(tzinfo=timezone.utc)
+            traces = [t for t in traces if t.start_time <= ed]
+
+        return len(traces)
+
     # ------------------------------------------------------------------
     # Convenience / introspection
     # ------------------------------------------------------------------
