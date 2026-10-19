@@ -169,7 +169,7 @@ Parent Agent
 
 ### D. Adaptive Observability
 
-*Phase 2 feature:*
+*Phase 10 feature:*
 
 Events are classified into observation levels:
 
@@ -178,7 +178,28 @@ Events are classified into observation levels:
 - **METADATA_ONLY** — Store minimal information
 - **DROP** — Do not retain the event payload
 
-Initial policy will be rule-based. No ML/RL in Phase 1.
+The policy is **rule-based** and **deterministic** (no ML/RL).
+
+**Importance scoring** (`agentlens.observation.importance`) assigns each event a
+score in `[0, 1]`:
+
+```
+raw = base_by_status + weight_by_type + modifiers        # then clamp to [0, 1]
+```
+
+| Contribution | Value |
+|---|---|
+| `base_by_status` | FAILURE `0.90`, PARTIAL `0.70`, PENDING `0.60`, SUCCESS `0.30` |
+| `weight_by_type` | ERROR `1.00`, FINAL_RESPONSE `0.95`, RETRY `0.85`, DECISION `0.80`, SUBAGENT_* `0.70`, TOOL_CALL `0.55`, LLM_CALL/RETRIEVAL `0.50`, MEMORY_* `0.35` |
+| `parent_bonus` | `+0.10` when `parent_id is None` (structural root) |
+| `latency_bonus` | `+0.10` when `latency_ms >= 1000` |
+| `exception_bonus` | `+0.10` when `metadata["exception_type"]` is set |
+| `repetition_penalty` | `−0.15 × min(repeat_index, 3)` for repeated SUCCESS events (FINAL_RESPONSE / DECISION exempt) |
+
+Errors, failures, and retries therefore score highest and are never repetition
+penalised. All thresholds are configurable via `ScoringConfig`. Scoring is
+**inactive by default** — the collector only applies a scorer/policy when one is
+explicitly injected.
 
 ### E. Causal Graph
 
