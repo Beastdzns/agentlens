@@ -37,6 +37,7 @@ from typing import Any, Optional
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 
 from agentlens.events import (
     AgentEvent,
@@ -46,7 +47,10 @@ from agentlens.events import (
     create_event,
     create_trace,
 )
+from agentlens.storage.db import Database, _run_migrations
 from agentlens.storage.memory import InMemoryEventStore, InMemoryTraceStore
+from agentlens.storage.sqlite import SqliteEventStore, SqliteTraceStore
+from agentlens.web_api import app
 
 
 # ---------------------------------------------------------------------------
@@ -628,3 +632,205 @@ class TestConcurrencyIntegration:
                 assert by_id[cid].parent_id == parent_id, (
                     f"Child {cid} has wrong parent_id"
                 )
+
+
+# ============================================================================
+# 3. SQLite persistence integration (Phase 9)
+# ============================================================================
+#
+# The tests above exercise the in-memory backend.  The tests below run the
+# same real collector workflow against a file-backed SQLite database and drive
+# the merged trace-history API end to end.
+# ============================================================================
+
+SQLITE_MARKER = pytest.mark.integration
+
+
+@pytest.fixture
+async def sqlite_db(tmp_path):
+    """A migrated SQLite database backed by a temporary file."""
+    db = Database(tmp_path / "integration.db")
+    await db._open()
+    await _run_migrations(db)
+    try:
+        yield db
+    finally:
+        await db.close()
+
+
+@pytest.fixture
+async def sqlite_event_store(sqlite_db) -> SqliteEventStore:
+    return SqliteEventStore(sqlite_db)
+
+
+@pytest.fixture
+async def sqlite_trace_store(sqlite_db) -> SqliteTraceStore:
+    return SqliteTraceStore(sqlite_db)
+
+
+def _use_sqlite_backend(tmp_path, monkeypatch) -> str:
+    """Point the web app at a temp SQLite file and force offline runs."""
+    db_file = tmp_path / "api-integration.db"
+    monkeypatch.setenv("AGENTLENS_STORAGE", "sqlite")
+    monkeypatch.setenv("AGENTLENS_DB_PATH", str(db_file))
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    return str(db_file)
+
+
+@SQLITE_MARKER
+class TestSqliteStoreIntegration:
+    """The collector workflow produces the same structure on SQLite as in memory."""
+
+    async def _run_workflow(self, store) -> list[tuple]:
+        collector = AsyncCollectorShim(storage_backend=store)
+        trace_id = await collector.start_trace(agent_id="parity-agent")
+
+        root = await collector.record_event(
+            event_type=EventType.DECISION, latency_ms=1.0
+        )
+        collector.push_parent(root.event_id)
+        await collector.record_event(event_type=EventType.LLM_CALL, latency_ms=2.0)
+        failing = await collector.record_event(
+            event_type=EventType.TOOL_CALL,
+            status=EventStatus.FAILURE,
+            latency_ms=3.0,
+        )
+        collector.push_parent(failing.event_id)
+        await collector.record_event(event_type=EventType.RETRY, latency_ms=4.0)
+        collector.pop_parent()
+        collector.pop_parent()
+        await collector.record_event(event_type=EventType.FINAL_RESPONSE, latency_ms=5.0)
+        await collector.end_trace()
+
+        stored = await store.get_trace_events(trace_id)
+        assert stored  # sanity
+        # Normalise away random UUIDs/timestamps but keep ordering + structure.
+        parents = {root.event_id: "root", failing.event_id: "tool"}
+        return [
+            (
+                e.event_type.value,
+                e.status.value,
+                None if e.parent_id is None else parents.get(e.parent_id, "other"),
+                e.latency_ms,
+            )
+            for e in stored
+        ]
+
+    async def test_sqlite_matches_in_memory_workflow(
+        self, event_store, sqlite_event_store
+    ):
+        assert await self._run_workflow(sqlite_event_store) == await self._run_workflow(
+            event_store
+        )
+
+    async def test_events_survive_reopen(self, tmp_path):
+        path = tmp_path / "durable.db"
+
+        db = Database(path)
+        await db._open()
+        await _run_migrations(db)
+        store = SqliteEventStore(db)
+        collector = AsyncCollectorShim(storage_backend=store)
+        trace_id = await collector.start_trace(agent_id="durable-agent")
+        for _ in range(3):
+            await collector.record_event(event_type=EventType.LLM_CALL)
+        await collector.end_trace()
+        before = [e.event_id for e in await store.get_trace_events(trace_id)]
+        await db.close()
+
+        reopened = Database(path)
+        await reopened._open()
+        await _run_migrations(reopened)
+        try:
+            after = [
+                e.event_id
+                for e in await SqliteEventStore(reopened).get_trace_events(trace_id)
+            ]
+        finally:
+            await reopened.close()
+
+        assert len(before) == 3
+        assert after == before
+
+
+@SQLITE_MARKER
+class TestTraceHistoryApiIntegration:
+    """`POST /api/run` → `GET /api/traces` → `GET /api/traces/{id}` on SQLite."""
+
+    def test_run_history_and_detail_round_trip(self, tmp_path, monkeypatch):
+        _use_sqlite_backend(tmp_path, monkeypatch)
+
+        with TestClient(app) as client:
+            run = client.post("/api/run", json={"query": "integration query"}).json()
+            trace_id = run["trace_id"]
+
+            listing = client.get("/api/traces").json()
+            assert listing["count"] == 1
+            assert [item["trace_id"] for item in listing["items"]] == [trace_id]
+
+            detail = client.get(f"/api/traces/{trace_id}").json()
+            assert detail["trace_id"] == trace_id
+            assert [e["event_id"] for e in detail["events"]] == [
+                e["event_id"] for e in run["events"]
+            ]
+
+    def test_history_survives_restart(self, tmp_path, monkeypatch):
+        _use_sqlite_backend(tmp_path, monkeypatch)
+
+        with TestClient(app) as client:
+            run = client.post("/api/run", json={"query": "persist me"}).json()
+            trace_id = run["trace_id"]
+            event_count = len(run["events"])
+            assert event_count > 0
+
+        # A second lifespan simulates a server restart.
+        with TestClient(app) as client:
+            assert client.get("/api/traces").json()["count"] == 1
+            detail = client.get(f"/api/traces/{trace_id}")
+            assert detail.status_code == 200
+            assert len(detail.json()["events"]) == event_count
+
+    def test_pagination_across_multiple_runs(self, tmp_path, monkeypatch):
+        _use_sqlite_backend(tmp_path, monkeypatch)
+
+        with TestClient(app) as client:
+            for i in range(3):
+                assert client.post(
+                    "/api/run", json={"query": f"query-{i}"}
+                ).status_code == 200
+
+            first = client.get("/api/traces", params={"limit": 2}).json()
+            assert len(first["items"]) == 2
+            assert first["next_cursor"]
+
+            second = client.get(
+                "/api/traces",
+                params={"limit": 2, "cursor": first["next_cursor"]},
+            ).json()
+            assert len(second["items"]) == 1
+            assert second["next_cursor"] is None
+
+            seen = {i["trace_id"] for i in first["items"]} | {
+                i["trace_id"] for i in second["items"]
+            }
+            assert len(seen) == 3
+
+    def test_filters_and_validation(self, tmp_path, monkeypatch):
+        _use_sqlite_backend(tmp_path, monkeypatch)
+
+        with TestClient(app) as client:
+            client.post("/api/run", json={"query": "filter me"})
+
+            success = client.get("/api/traces", params={"status": "success"}).json()
+            assert success["count"] == 1
+
+            failure = client.get("/api/traces", params={"status": "failure"}).json()
+            assert failure["count"] == 0
+
+            assert (
+                client.get("/api/traces", params={"status": "bogus"}).status_code == 400
+            )
+            assert (
+                client.get("/api/traces", params={"start_date": "not-a-date"}).status_code
+                == 400
+            )

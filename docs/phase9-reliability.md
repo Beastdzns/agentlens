@@ -7,8 +7,10 @@ persistent (SQLite) storage backend added in Phase 9, and how they are
 verified.
 
 - Implementation: `src/agentlens/storage/db.py`, `src/agentlens/storage/sqlite.py`
+- Unit tests: `tests/test_storage_reliability_unit.py`
 - Store tests: `tests/test_storage_sqlite.py`
 - Scenario tests: `tests/test_persistence_reliability.py`
+- Integration tests: `tests/integration/test_integration.py` (section 3)
 - Benchmark script: `tests/benchmark_storage.py`
 
 ---
@@ -17,6 +19,9 @@ verified.
 
 | Property | How it is tested |
 |---|---|
+| **Helpers** | `_dt_to_str`/`_str_to_dt` (UTC normalisation, fixed precision, lexical sortability), cursor encode/decode, row→model mapping, PRAGMA setup (`test_storage_reliability_unit.py`). |
+| **Lifecycle** | `get_database()` before init raises; `close_database()` is idempotent and resets the singleton; `init_db()` is idempotent while open and opens a *fresh* instance after close. |
+| **Migrations (unit)** | Missing directory is a no-op; unversioned files are skipped; `_applied_versions` is empty without the bookkeeping table. |
 | **Fidelity** | Round-trip of UUIDs, timezone-aware datetimes, nested JSON, unicode, `None`, ~5 KB payloads (`test_event_round_trip_fidelity`). |
 | **Ordering** | Events returned in `timestamp` order regardless of insert order (`test_get_trace_events_ordered_by_timestamp`). |
 | **Concurrency** | 40 concurrent writers × 5 events = 200 events, plus a mixed read/write storm; no `database is locked` (`TestConcurrency`). |
@@ -26,16 +31,21 @@ verified.
 | **Fail-open** | A broken store never crashes the agent — `EventCollector` warns and continues (`test_collector_is_fail_open_with_broken_store`). |
 | **Restart (app-level)** | Repeated FastAPI lifespan start/stop cycles reuse the file and accumulate traces (`test_persistence_reliability.py`). |
 | **Config** | WAL journal mode, `synchronous=NORMAL`, `busy_timeout=5000` are applied per connection (`TestConnectionConfig`). |
+| **API integration** | `POST /api/run` → `GET /api/traces` → `GET /api/traces/{id}` round-trip, restart persistence, keyset pagination and filter/validation errors on SQLite (`tests/integration/test_integration.py`). |
 
 ### Running the tests
 
 ```bash
-./venv/bin/python -m pytest tests/test_storage_sqlite.py tests/test_persistence_reliability.py -q
+./venv/bin/python -m pytest \
+    tests/test_storage_reliability_unit.py \
+    tests/test_storage_sqlite.py \
+    tests/test_persistence_reliability.py \
+    tests/integration/test_integration.py -q
 ```
 
-Current result: **39 tests pass** (32 store-level + 7 scenario-level), part of
-the full **272-test** Python suite; the **85 / 85** browser tests are
-unaffected.
+Current result: **75 reliability tests pass** (30 unit + 32 store-level + 7
+scenario-level + 6 SQLite integration), part of the full **308-test** Python
+suite; the **85 / 85** browser tests are unaffected.
 
 ---
 
