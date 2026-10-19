@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 AgentLens Phase 6 Demo Launcher
 ===============================
@@ -87,6 +87,10 @@ def main() -> None:
             webbrowser.open(dashboard_url)
         except Exception:
             pass
+
+    # Persist traces across restarts when running the live demo server.
+    # Tests stay memory-backed (they never set AGENTLENS_STORAGE=sqlite).
+    os.environ.setdefault("AGENTLENS_STORAGE", "sqlite")
 
     import uvicorn
 
