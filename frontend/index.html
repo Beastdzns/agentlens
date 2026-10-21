@@ -66,6 +66,30 @@
           <div class="meta-item"><span class="meta-key">Latency</span><span id="metaLatency" class="meta-val"></span></div>
           <div class="meta-item"><span class="meta-key">Events</span><span id="metaEventCount" class="meta-val"></span></div>
         </div>
+
+        <!-- Trace history (Phase 12): browses GET /api/traces -->
+        <div id="historySection" class="history-section">
+          <div class="history-head">
+            <div class="section-label history-label">Trace History</div>
+            <button id="historyRefresh" class="history-refresh" title="Reload traces" aria-label="Reload traces">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            </button>
+          </div>
+          <div class="history-filters">
+            <select id="historyStatus" class="history-select" aria-label="Filter traces by status">
+              <option value="all">All statuses</option>
+              <option value="success">Success</option>
+              <option value="failure">Failure</option>
+              <option value="partial">Partial</option>
+              <option value="pending">Pending</option>
+            </select>
+            <input id="historyFrom" class="history-date" type="date" title="From date" aria-label="From date" />
+            <input id="historyTo" class="history-date" type="date" title="To date" aria-label="To date" />
+          </div>
+          <div id="historyMeta" class="history-meta"></div>
+          <div id="historyList" class="history-list"></div>
+          <button id="historyMore" class="history-more hidden">Load more</button>
+        </div>
       </div>
     </aside>
 
@@ -113,6 +137,9 @@
           <div id="responseText" class="response-text"></div>
         </div>
 
+        <!-- Live-run failure state: why the run failed + a pointer to the analysis -->
+        <div id="runFailure" class="run-failure hidden"></div>
+
         <!-- Failure-run summary banner: shown only when failure_count > 0 -->
         <div id="failureSummary" class="failure-summary hidden"></div>
 
@@ -127,7 +154,7 @@
           <div id="causalPanel" class="causal-panel"></div>
         </div>
 
-        <div class="result-section">
+        <div class="result-section" id="timelineSection">
           <div class="result-section-header">
             <h3 class="result-section-title">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
