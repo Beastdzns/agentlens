@@ -156,6 +156,10 @@ class EventCollector:
         self._storage = storage_backend
         self._scorer = scorer
         self._policy = policy
+        # The most recently recorded event.  Lets a caller that used a capture
+        # context manager link the *next* step to it (the manager records the
+        # event when the block exits, so the id is only known afterwards).
+        self.last_event: Optional[AgentEvent] = None
         # Per-trace repeat counters: trace_id (str) -> {event_type -> count}
         # defaultdict keeps this async-safe without explicit locking because
         # asyncio is single-threaded within an event loop.
@@ -302,6 +306,7 @@ class EventCollector:
                     stacklevel=2,
                 )
 
+        self.last_event = event
         return event
 
     # ------------------------------------------------------------------
@@ -389,7 +394,7 @@ class EventCollector:
         *,
         retry_of: Optional[UUID] = None,
         attempt: int = 1,
-    ) -> AsyncIterator[None]:
+    ) -> AsyncIterator[list[Any]]:
         """
         Generic async context manager that captures a single pipeline step.
 
@@ -410,7 +415,11 @@ class EventCollector:
             attempt: Attempt counter (1 = first try, 2 = first retry, …).
 
         Yields:
-            Nothing — the body runs inside the ``async with`` block.
+            A ``list`` with one ``None`` element.  Assign the step's output to
+            ``result[0]`` inside the ``async with`` body — it is recorded as
+            the event's ``output_data``.  The holder is optional: ``async with
+            collector.capture_step(...)`` without ``as`` keeps working and
+            records ``output_data=None``.
 
         Raises:
             Any exception raised inside the body (re-raised after recording).
@@ -418,13 +427,13 @@ class EventCollector:
         Example::
 
             async with collector.capture_step(
-                EventType.LLM_CALL,
-                input_data={"prompt": "..."},
-                metadata={"step": "synthesis"},
-            ):
-                result = await call_llm(prompt)
+                EventType.RETRIEVAL,
+                input_data={"top_k": 3},
+            ) as result:
+                result[0] = await retrieve(query)
         """
         _start = time.perf_counter()
+        result: list[Any] = [None]
         _base_meta: dict[str, Any] = dict(metadata or {})
         if retry_of is not None:
             _base_meta["retry_of"] = str(retry_of)
@@ -432,7 +441,7 @@ class EventCollector:
             _base_meta["attempt"] = attempt
 
         try:
-            yield
+            yield result
         except Exception as exc:
             _latency = (time.perf_counter() - _start) * 1000
             _fail_meta = {
@@ -455,6 +464,7 @@ class EventCollector:
                 event_type=event_type,
                 status=EventStatus.SUCCESS,
                 input_data=input_data,
+                output_data=result[0],
                 latency_ms=_latency,
                 metadata=_base_meta if _base_meta else None,
             )

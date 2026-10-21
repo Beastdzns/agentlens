@@ -159,13 +159,15 @@ def _save_synthetic_trace(
 class TestTimeoutScenarios:
     """A timed-out LLM call must persist an identifiable failure event."""
 
-    def test_gemini_timeout_returns_502_and_persists_trace(self, client: TestClient):
-        """A TimeoutError from Gemini surfaces as HTTP 502 and a stored FAILURE trace."""
+    def test_gemini_timeout_returns_the_failed_trace(self, client: TestClient):
+        """A TimeoutError from Gemini returns the failed trace, not a bare 502."""
         with gemini_raising(TimeoutError("Gemini request timed out after 30s")):
             resp = client.post("/api/run", json={"query": "timeout scenario"})
 
-        assert resp.status_code == 502
-        assert "Agent execution failed" in resp.json()["detail"]
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "failure"
+        assert "timed out" in body["error"]
 
         trace = _persisted_trace()
         assert trace.status == EventStatus.FAILURE
