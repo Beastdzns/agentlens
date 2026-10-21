@@ -439,6 +439,184 @@ function testRenderEventListShowsObservationBadges() {
   activeFilter = 'all';
 }
 
+/* ── Causal analysis panel (Phase 11) ───────────────────────── */
+
+function makeGraph(overrides) {
+  return {
+    trace_id: 'cg-0000-0000-0000-000000000001',
+    nodes: [
+      { event_id: 'n-1', parent_id: null,  event_type: 'llm_call',  status: 'success', timestamp: testTs(0), label: 'llm_call',            is_failure: false },
+      { event_id: 'n-2', parent_id: 'n-1', event_type: 'tool_call', status: 'failure', timestamp: testTs(1), label: 'tool_call: db_query', is_failure: true,  error_message: 'Database connection refused' },
+      { event_id: 'n-3', parent_id: 'n-2', event_type: 'error',     status: 'failure', timestamp: testTs(2), label: 'error',                is_failure: true,  error_message: 'cascading failure' },
+    ],
+    edges: [
+      { source: 'n-1', target: 'n-2', relation: 'parent_of' },
+      { source: 'n-2', target: 'n-3', relation: 'parent_of' },
+      { source: 'n-2', target: 'n-3', relation: 'influenced' },
+    ],
+    ...overrides
+  };
+}
+
+function makeRootCause(overrides) {
+  return {
+    verdict: 'root_cause',
+    root_cause_event_id: 'n-2',
+    confidence: 0.8,
+    category: 'tool_error',
+    explanation: 'The root cause is tool_call: db_query.',
+    evidence_path: ['n-2', 'n-3'],
+    primary_failures: ['n-2'],
+    secondary_failures: ['n-3'],
+    affected_events: [],
+    recovered_failures: [],
+    ...overrides
+  };
+}
+
+function testCausalLayoutColumns() {
+  const layout = layoutCausalGraph(makeGraph());
+  assertEqual(layout.positions.length, 3, 'causal layout: every node is placed');
+  assertEqual(layout.layers, 3, 'causal layout: a three-step chain uses three columns');
+
+  const byId = {};
+  layout.positions.forEach(p => { byId[p.id] = p; });
+
+  assert(byId['n-1'].x < byId['n-2'].x, 'causal layout: a parent sits left of its child');
+  assert(byId['n-2'].x < byId['n-3'].x, 'causal layout: the chain grows to the right');
+  assertEqual(byId['n-1'].layer, 0, 'causal layout: the root is in the first column');
+  assertEqual(byId['n-2'].layer, 1, 'causal layout: the child is in the second column');
+  assertEqual(byId['n-3'].layer, 2, 'causal layout: the leaf is in the third column');
+  assertEqual(byId['n-1'].x, CAUSAL_LAYOUT.padding, 'causal layout: the first column starts at the padding');
+  assert(layout.width > 0 && layout.height > 0, 'causal layout: the canvas has a size');
+  assertEqual(byId['n-1'].y, byId['n-2'].y, 'causal layout: a single-node column is centred');
+}
+
+function testCausalLayoutDeterministic() {
+  const a = layoutCausalGraph(makeGraph());
+  const b = layoutCausalGraph(makeGraph());
+  const key = l => JSON.stringify(l.positions.map(p => [p.id, p.x, p.y]));
+  assertEqual(key(a), key(b), 'causal layout: the same graph always draws the same picture');
+
+  const graph = makeGraph({
+    nodes: [
+      { event_id: 'x-2', parent_id: 'x-1', timestamp: testTs(1), label: 'b' },
+      { event_id: 'x-1', parent_id: null,  timestamp: testTs(0), label: 'a' },
+      { event_id: 'x-3', parent_id: 'x-1', timestamp: testTs(0), label: 'c' },
+    ],
+    edges: [],
+  });
+  const layout = layoutCausalGraph(graph);
+  const column = layout.positions.filter(p => p.layer === 1).map(p => p.id);
+  assertEqual(column.join(','), 'x-3,x-2', 'causal layout: rows are ordered by (timestamp, event_id)');
+}
+
+function testCausalLayoutRobust() {
+  const cyclic = makeGraph({
+    nodes: [
+      { event_id: 'c-1', parent_id: 'c-2', timestamp: testTs(0), label: 'a' },
+      { event_id: 'c-2', parent_id: 'c-1', timestamp: testTs(1), label: 'b' },
+    ],
+    edges: [],
+  });
+  assertEqual(layoutCausalGraph(cyclic).positions.length, 2, 'causal layout: a cycle does not hang the layout');
+
+  const orphan = makeGraph({
+    nodes: [{ event_id: 'o-1', parent_id: 'gone', timestamp: testTs(0), label: 'orphan' }],
+    edges: [],
+  });
+  assertEqual(layoutCausalGraph(orphan).positions.length, 1, 'causal layout: an orphan node is still placed');
+  assertEqual(layoutCausalGraph(orphan).positions[0].layer, 0, 'causal layout: an orphan node starts in the first column');
+
+  assertEqual(layoutCausalGraph(null).positions.length, 0, 'causal layout: no graph places nothing');
+  assertEqual(layoutCausalGraph({ nodes: [], edges: [] }).positions.length, 0, 'causal layout: an empty graph places nothing');
+}
+
+function testCausalGraphRenders() {
+  const svg = renderCausalGraph(makeGraph(), makeRootCause());
+  assert(svg.startsWith('<svg'), 'causal graph: renders an SVG');
+  assert(svg.includes('data-testid="causal-svg"'), 'causal graph: the SVG is marked for the tests');
+  assert(svg.includes('viewBox="0 0 '), 'causal graph: the SVG has a viewBox');
+  assertEqual((svg.match(/data-event-id="/g) || []).length, 3, 'causal graph: one group per node');
+  assert(svg.includes('data-event-id="n-1"'), 'causal graph: nodes carry their event id');
+  assert(svg.includes('data-relation="parent_of"'), 'causal graph: edges carry their relation');
+  assert(svg.includes('cg-edge-influenced'), 'causal graph: the influenced relation has its own style');
+  assert(svg.includes('cg-edge-retry') === false, 'causal graph: an unused relation is not drawn');
+}
+
+function testCausalGraphHighlightsRootCause() {
+  const svg = renderCausalGraph(makeGraph(), makeRootCause());
+  assert(svg.includes('data-root-cause="true"'), 'causal graph: the root cause is marked');
+  assertEqual((svg.match(/data-root-cause="true"/g) || []).length, 1, 'causal graph: exactly one node is the root cause');
+  assert(svg.includes('cg-node-root'), 'causal graph: the root cause node is styled');
+  assert(svg.includes('ROOT CAUSE'), 'causal graph: the root cause node is labelled');
+  assert(svg.includes('cg-edge-hot'), 'causal graph: the evidence path is highlighted');
+  assert(svg.includes('cg-node-failure'), 'causal graph: failed steps are styled');
+}
+
+function testCausalGraphWithoutDiagnosis() {
+  const svg = renderCausalGraph(makeGraph(), null);
+  assert(svg.includes('data-event-id="n-2"'), 'causal graph: the graph renders without a diagnosis');
+  assert(svg.includes('data-root-cause="false"'), 'causal graph: no node is the root cause without a diagnosis');
+  assert(svg.includes('cg-edge-hot') === false, 'causal graph: no path is highlighted without a diagnosis');
+  assertEqual(renderCausalGraph(null, null), '', 'causal graph: no graph renders nothing');
+  assertEqual(renderCausalGraph({ nodes: [], edges: [] }, null), '', 'causal graph: an empty graph renders nothing');
+}
+
+function testCausalGraphEscapesHtml() {
+  const graph = makeGraph({
+    nodes: [{ event_id: 'n-x', parent_id: null, timestamp: testTs(0), label: '<script>alert(1)</script>' }],
+    edges: [],
+  });
+  const svg = renderCausalGraph(graph, null);
+  assert(svg.includes('<script>') === false, 'causal graph: labels are escaped');
+  assert(svg.includes('&lt;script&gt;'), 'causal graph: the escaped label is rendered as text');
+}
+
+function testRootCausePanel() {
+  const html = renderRootCausePanel(makeRootCause(), makeGraph());
+  assert(html.includes('causal-verdict-root_cause'), 'root cause panel: the verdict drives the style');
+  assert(html.includes('Root cause identified'), 'root cause panel: the verdict has a label');
+  assert(html.includes('>0.80<'), 'root cause panel: the confidence is shown');
+  assert(html.includes('tool_error'), 'root cause panel: the category is shown');
+  assert(html.includes('The root cause is tool_call: db_query.'), 'root cause panel: the explanation is shown');
+  assert(html.includes('tool_call: db_query → error'), 'root cause panel: the evidence path is shown');
+  assert(html.includes('<b>1</b> secondary failures'), 'root cause panel: the secondary failures are counted');
+  assertEqual(renderRootCausePanel(null, null), '', 'root cause panel: no diagnosis renders nothing');
+
+  const recovered = renderRootCausePanel(
+    makeRootCause({ verdict: 'recovered', root_cause_event_id: null, confidence: 0, category: 'none' }),
+    makeGraph()
+  );
+  assert(recovered.includes('causal-verdict-recovered'), 'root cause panel: the recovered verdict has its own style');
+  assert(recovered.includes('Failure recovered'), 'root cause panel: the recovered verdict has a label');
+}
+
+function testCausalPanel() {
+  const html = renderCausalPanel({ causal_graph: makeGraph(), root_cause: makeRootCause() });
+  assert(html.includes('causal-inner'), 'causal panel: renders the container');
+  assert(html.includes('causal-svg'), 'causal panel: includes the graph');
+  assert(html.includes('causal-diagnosis'), 'causal panel: includes the diagnosis');
+  assert(html.includes('causal-legend'), 'causal panel: includes the legend');
+  assert(html.includes('3 events'), 'causal panel: the legend counts the events');
+  assertEqual(renderCausalPanel({}), '', 'causal panel: a trace without a graph renders nothing');
+  assertEqual(renderCausalPanel(null), '', 'causal panel: no data renders nothing');
+  assertEqual(renderCausalPanel({ causal_graph: { nodes: [], edges: [] } }), '', 'causal panel: an empty graph renders nothing');
+}
+
+function testCausalSectionVisibility() {
+  renderCausalSection({});
+  assert(causalSection.classList.contains('hidden'), 'causal section: hidden when the trace has no graph');
+  assertEqual(causalPanel.innerHTML, '', 'causal section: empty when the trace has no graph');
+
+  renderCausalSection({ causal_graph: makeGraph(), root_cause: makeRootCause() });
+  assert(causalSection.classList.contains('hidden') === false, 'causal section: shown when a graph is available');
+  assert(causalPanel.innerHTML.includes('causal-svg'), 'causal section: renders the panel');
+
+  renderCausalSection({});
+  assert(causalSection.classList.contains('hidden'), 'causal section: hidden again after a trace without a graph');
+}
+
 /* ── Run all tests ───────────────────────────────────────────── */
 
 function runAllTests() {
@@ -467,5 +645,15 @@ function runAllTests() {
   testObservationBadgeDefault();
   testImportanceBar();
   testRenderEventListShowsObservationBadges();
+  testCausalLayoutColumns();
+  testCausalLayoutDeterministic();
+  testCausalLayoutRobust();
+  testCausalGraphRenders();
+  testCausalGraphHighlightsRootCause();
+  testCausalGraphWithoutDiagnosis();
+  testCausalGraphEscapesHtml();
+  testRootCausePanel();
+  testCausalPanel();
+  testCausalSectionVisibility();
   renderReport();
 }

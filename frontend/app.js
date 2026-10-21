@@ -166,6 +166,9 @@ const metaStatus     = document.getElementById('metaStatus');
 const metaLatency    = document.getElementById('metaLatency');
 const metaEventCount = document.getElementById('metaEventCount');
 
+const causalSection  = document.getElementById('causalSection');
+const causalPanel    = document.getElementById('causalPanel');
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 function escHtml(str) {
   return String(str)
@@ -299,6 +302,9 @@ function renderResults(data) {
 
   // -- Failure summary banner (shows above timeline for failed traces)
   renderFailureSummary(data, sortedEvents);
+
+  // -- Causal analysis panel (Phase 11) — hidden when the trace has no graph
+  renderCausalSection(data);
 
   renderEventList();
 
@@ -605,6 +611,361 @@ filterBtns.forEach(btn => {
   });
 });
 
+// ── Causal analysis panel (Phase 11) ───────────────────────────────────────
+/**
+ * Renders the causal graph of a trace and the root-cause diagnosis on top of
+ * it.
+ *
+ * The layout is a deterministic layered graph: every node is placed in the
+ * column of its parent (`parent_of` edges), and the rows inside a column are
+ * ordered by (timestamp, event_id).  The same graph therefore always draws
+ * the same picture — no physics, no randomness, no new dependency.
+ */
+
+const CAUSAL_LAYOUT = {
+  nodeWidth:  210,
+  nodeHeight:  54,
+  layerGap:    92,
+  rowGap:      18,
+  padding:     28,
+};
+
+const CAUSAL_EDGE_CLASS = {
+  parent_of:  'cg-edge-parent',
+  retry_of:   'cg-edge-retry',
+  depends_on: 'cg-edge-depends',
+  influenced: 'cg-edge-influenced',
+};
+
+const CAUSAL_VERDICT_LABEL = {
+  root_cause:            'Root cause identified',
+  no_failure:            'No failure recorded',
+  recovered:             'Failure recovered',
+  insufficient_evidence: 'Insufficient evidence',
+};
+
+let _causalSvgSeq = 0;
+
+function causalTruncate(text, max) {
+  const s = String(text == null ? '' : text);
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+/**
+ * Assign every node of the graph to a column (layer) and a row.
+ *
+ * @param {object} graph  the `causal_graph` payload of the API
+ * @returns {object}      {positions, byId, edges, width, height, layers}
+ */
+function layoutCausalGraph(graph) {
+  const nodes = (graph && Array.isArray(graph.nodes)) ? graph.nodes.slice() : [];
+  const edges = (graph && Array.isArray(graph.edges))
+    ? graph.edges.filter(e => e && e.source != null && e.target != null)
+    : [];
+
+  const byId = new Map();
+  nodes.forEach(n => byId.set(String(n.event_id), n));
+
+  // The column of a node is decided by its parent.  `parent_id` is the
+  // authoritative link; the `parent_of` edge is the fallback for payloads
+  // that only carry the edges.  A parent that is not part of the graph is
+  // ignored — an unresolvable reference must not invent a relation.
+  const parentOf = new Map();
+  nodes.forEach(n => parentOf.set(String(n.event_id), null));
+  edges.forEach(e => {
+    if (e.relation === 'parent_of' && byId.has(String(e.target))) {
+      parentOf.set(String(e.target), String(e.source));
+    }
+  });
+  nodes.forEach(n => {
+    const declared = n.parent_id == null ? null : String(n.parent_id);
+    if (declared != null && byId.has(declared)) {
+      parentOf.set(String(n.event_id), declared);
+    }
+  });
+
+  // Layer of a node = its distance to a root.  Memoised and cycle-safe.
+  const layers = new Map();
+  const resolveLayer = (id) => {
+    if (layers.has(id)) return layers.get(id);
+    const chain = [];
+    const seen = new Set();
+    let current = id;
+    while (current != null && !layers.has(current) && !seen.has(current)) {
+      seen.add(current);
+      chain.push(current);
+      current = parentOf.has(current) ? parentOf.get(current) : null;
+    }
+    let base = layers.has(current) ? layers.get(current) + 1 : 0;
+    for (let i = chain.length - 1; i >= 0; i--) {
+      layers.set(chain[i], base);
+      base += 1;
+    }
+    return layers.get(id) || 0;
+  };
+
+  // Group the nodes by layer, ordered deterministically inside a layer.
+  const columns = new Map();
+  nodes.forEach(n => {
+    const layer = resolveLayer(String(n.event_id));
+    if (!columns.has(layer)) columns.set(layer, []);
+    columns.get(layer).push(n);
+  });
+  columns.forEach(list => list.sort((a, b) => {
+    const ta = String(a.timestamp || '');
+    const tb = String(b.timestamp || '');
+    if (ta !== tb) return ta < tb ? -1 : 1;
+    const ia = String(a.event_id);
+    const ib = String(b.event_id);
+    return ia < ib ? -1 : (ia > ib ? 1 : 0);
+  }));
+
+  const layerKeys = Array.from(columns.keys()).sort((a, b) => a - b);
+  const maxRows = layerKeys.reduce((max, k) => Math.max(max, columns.get(k).length), 0);
+  const contentHeight = maxRows * CAUSAL_LAYOUT.nodeHeight
+                     + Math.max(0, maxRows - 1) * CAUSAL_LAYOUT.rowGap;
+  const width = layerKeys.length * CAUSAL_LAYOUT.nodeWidth
+              + Math.max(0, layerKeys.length - 1) * CAUSAL_LAYOUT.layerGap
+              + CAUSAL_LAYOUT.padding * 2;
+  const height = contentHeight + CAUSAL_LAYOUT.padding * 2;
+
+  const positions = [];
+  const positionById = new Map();
+  layerKeys.forEach((layer, column) => {
+    const list = columns.get(layer);
+    const columnHeight = list.length * CAUSAL_LAYOUT.nodeHeight
+                       + Math.max(0, list.length - 1) * CAUSAL_LAYOUT.rowGap;
+    const yOffset = CAUSAL_LAYOUT.padding + (contentHeight - columnHeight) / 2;
+    list.forEach((node, row) => {
+      const pos = {
+        id: String(node.event_id),
+        x: CAUSAL_LAYOUT.padding
+           + column * (CAUSAL_LAYOUT.nodeWidth + CAUSAL_LAYOUT.layerGap),
+        y: yOffset + row * (CAUSAL_LAYOUT.nodeHeight + CAUSAL_LAYOUT.rowGap),
+        node,
+        layer,
+        row,
+      };
+      positions.push(pos);
+      positionById.set(pos.id, pos);
+    });
+  });
+
+  return { positions, byId: positionById, edges, width, height, layers: layerKeys.length };
+}
+
+/**
+ * Draw the causal graph as an SVG.
+ *
+ * @param {object} graph      the `causal_graph` payload
+ * @param {object} rootCause  the `root_cause` payload (may be null)
+ * @returns {string}          the SVG markup (empty when there is no graph)
+ */
+function renderCausalGraph(graph, rootCause) {
+  const layout = layoutCausalGraph(graph);
+  if (!layout.positions.length) return '';
+
+  const rootId = rootCause && rootCause.root_cause_event_id
+    ? String(rootCause.root_cause_event_id)
+    : null;
+  const evidence = new Set(((rootCause && rootCause.evidence_path) || []).map(String));
+  const affected = new Set(((rootCause && rootCause.affected_events) || []).map(String));
+
+  const uid = `cg${++_causalSvgSeq}`;
+  const parts = [];
+
+  parts.push(
+    `<svg class="causal-svg" viewBox="0 0 ${layout.width} ${layout.height}" ` +
+    `preserveAspectRatio="xMinYMin meet" role="img" ` +
+    `aria-label="Causal graph of the trace" data-testid="causal-svg">`
+  );
+  parts.push(
+    '<defs>' +
+    `<marker id="${uid}-arrow" markerWidth="9" markerHeight="9" refX="8" refY="3" ` +
+    'orient="auto"><path d="M0,0 L0,6 L9,3 z" class="cg-arrow-head" /></marker>' +
+    `<marker id="${uid}-arrow-hot" markerWidth="9" markerHeight="9" refX="8" refY="3" ` +
+    'orient="auto"><path d="M0,0 L0,6 L9,3 z" class="cg-arrow-head cg-arrow-head-hot" /></marker>' +
+    '</defs>'
+  );
+
+  // -- edges ---------------------------------------------------------------
+  parts.push('<g class="cg-edges">');
+  layout.edges.forEach(edge => {
+    const from = layout.byId.get(String(edge.source));
+    const to = layout.byId.get(String(edge.target));
+    if (!from || !to) return;
+    const x1 = from.x + CAUSAL_LAYOUT.nodeWidth;
+    const y1 = from.y + CAUSAL_LAYOUT.nodeHeight / 2;
+    const x2 = to.x;
+    const y2 = to.y + CAUSAL_LAYOUT.nodeHeight / 2;
+    const mid = (x1 + x2) / 2;
+    const d = `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
+    const hot = evidence.has(String(edge.source)) && evidence.has(String(edge.target));
+    const cls = CAUSAL_EDGE_CLASS[edge.relation] || 'cg-edge-parent';
+    parts.push(
+      `<path class="cg-edge ${cls}${hot ? ' cg-edge-hot' : ''}" d="${d}" ` +
+      `marker-end="url(#${uid}-arrow${hot ? '-hot' : ''})" ` +
+      `data-relation="${escHtml(edge.relation || '')}" ` +
+      `data-source="${escHtml(String(edge.source))}" ` +
+      `data-target="${escHtml(String(edge.target))}" />`
+    );
+  });
+  parts.push('</g>');
+
+  // -- nodes ---------------------------------------------------------------
+  parts.push('<g class="cg-nodes">');
+  layout.positions.forEach(pos => {
+    const node = pos.node || {};
+    const isRoot = rootId != null && pos.id === rootId;
+    const isFailure = node.is_failure === true || statusClass(node.status) === 'failure';
+    const onEvidence = evidence.has(pos.id);
+    const isAffected = affected.has(pos.id);
+    const classes = ['cg-node'];
+    if (isFailure) classes.push('cg-node-failure');
+    if (isRoot) classes.push('cg-node-root');
+    if (onEvidence) classes.push('cg-node-evidence');
+    if (isAffected) classes.push('cg-node-affected');
+
+    const label = causalTruncate(node.label || node.event_type || node.event_id, 30);
+    const type = causalTruncate(node.event_type || '', 22);
+
+    parts.push(
+      `<g class="${classes.join(' ')}" transform="translate(${pos.x},${pos.y})" ` +
+      `data-event-id="${escHtml(pos.id)}" data-root-cause="${isRoot ? 'true' : 'false'}">`
+    );
+    parts.push(
+      `<rect class="cg-node-box" width="${CAUSAL_LAYOUT.nodeWidth}" ` +
+      `height="${CAUSAL_LAYOUT.nodeHeight}" rx="9" ry="9" />`
+    );
+    parts.push(
+      `<circle class="cg-node-dot" cx="14" cy="${CAUSAL_LAYOUT.nodeHeight / 2}" r="5" />`
+    );
+    parts.push(
+      `<text class="cg-node-label" x="28" y="22">${escHtml(label)}</text>`
+    );
+    parts.push(
+      `<text class="cg-node-type" x="28" y="39">${escHtml(type)}</text>`
+    );
+    if (isRoot) {
+      parts.push(
+        `<text class="cg-node-tag" x="${CAUSAL_LAYOUT.nodeWidth - 10}" y="16" ` +
+        `text-anchor="end">ROOT CAUSE</text>`
+      );
+    }
+    parts.push('</g>');
+  });
+  parts.push('</g>');
+  parts.push('</svg>');
+
+  return parts.join('');
+}
+
+/**
+ * Render the root-cause diagnosis.
+ *
+ * @param {object} rootCause  the `root_cause` payload (may be null)
+ * @param {object} graph      the `causal_graph` payload (used for the labels)
+ * @returns {string}          the markup (empty when there is no diagnosis)
+ */
+function renderRootCausePanel(rootCause, graph) {
+  if (!rootCause) return '';
+  const verdict = String(rootCause.verdict || 'no_failure');
+  const label = CAUSAL_VERDICT_LABEL[verdict] || verdict;
+  const confidence = typeof rootCause.confidence === 'number' ? rootCause.confidence : 0;
+
+  const nodesById = new Map(((graph && graph.nodes) || []).map(n => [String(n.event_id), n]));
+  const pathText = (rootCause.evidence_path || []).map(id => {
+    const n = nodesById.get(String(id));
+    return n ? (n.label || n.event_type || id) : String(id);
+  }).join(' → ');
+
+  const parts = [];
+  parts.push(`<div class="causal-diagnosis causal-verdict-${escHtml(verdict)}">`);
+  parts.push(
+    '<div class="cd-head">' +
+    `<span class="cd-verdict">${escHtml(label)}</span>` +
+    `<span class="cd-confidence" title="Confidence">${confidence.toFixed(2)}</span>` +
+    `<span class="cd-category">${escHtml(rootCause.category || 'none')}</span>` +
+    '</div>'
+  );
+  if (rootCause.explanation) {
+    parts.push(`<p class="cd-explanation">${escHtml(rootCause.explanation)}</p>`);
+  }
+  if (pathText) {
+    parts.push(`<div class="cd-path"><span class="cd-path-label">Evidence path</span>${escHtml(pathText)}</div>`);
+  }
+  const affectedCount = (rootCause.affected_events || []).length;
+  const secondaryCount = (rootCause.secondary_failures || []).length;
+  const recoveredCount = (rootCause.recovered_failures || []).length;
+  parts.push(
+    '<div class="cd-stats">' +
+    `<span class="cd-stat"><b>${affectedCount}</b> affected</span>` +
+    `<span class="cd-stat"><b>${secondaryCount}</b> secondary failures</span>` +
+    `<span class="cd-stat"><b>${recoveredCount}</b> recovered</span>` +
+    '</div>'
+  );
+  parts.push('</div>');
+  return parts.join('');
+}
+
+/**
+ * The complete causal panel: diagnosis + graph + legend.
+ *
+ * @param {object} data  the API response of a trace
+ * @returns {string}     the markup
+ */
+function renderCausalPanel(data) {
+  const graph = data && data.causal_graph;
+  const rootCause = data && data.root_cause;
+  if (!graph || !Array.isArray(graph.nodes) || !graph.nodes.length) return '';
+
+  const layout = layoutCausalGraph(graph);
+  const parts = [];
+  parts.push('<div class="causal-inner">');
+  parts.push(renderRootCausePanel(rootCause, graph));
+  parts.push(
+    '<div class="causal-canvas"><div class="causal-scroll">' +
+    renderCausalGraph(graph, rootCause) +
+    '</div></div>'
+  );
+  parts.push(
+    '<div class="causal-legend">' +
+    '<span class="cg-legend-item"><i class="cg-legend-dot cg-legend-failure"></i>failed step</span>' +
+    '<span class="cg-legend-item"><i class="cg-legend-box cg-legend-root"></i>root cause</span>' +
+    '<span class="cg-legend-item"><i class="cg-legend-line cg-legend-parent"></i>parent → child</span>' +
+    '<span class="cg-legend-item"><i class="cg-legend-line cg-legend-influenced"></i>failure propagation</span>' +
+    `<span class="cg-legend-count">${layout.positions.length} events · ${layout.layers} layer(s)</span>` +
+    '</div>'
+  );
+  parts.push('</div>');
+  return parts.join('');
+}
+
+window.layoutCausalGraph = layoutCausalGraph;
+window.renderCausalGraph = renderCausalGraph;
+window.renderRootCausePanel = renderRootCausePanel;
+window.renderCausalPanel = renderCausalPanel;
+window.CAUSAL_LAYOUT = CAUSAL_LAYOUT;
+
+/**
+ * Show or hide the causal-analysis section of the dashboard.
+ *
+ * A trace recorded before Phase 11 has no graph — the section is hidden
+ * instead of showing an empty box (graceful degradation).
+ */
+function renderCausalSection(data) {
+  if (!causalSection || !causalPanel) return;
+  const markup = renderCausalPanel(data);
+  if (!markup) {
+    causalSection.classList.add('hidden');
+    causalPanel.innerHTML = '';
+    return;
+  }
+  causalPanel.innerHTML = markup;
+  causalSection.classList.remove('hidden');
+}
+window.renderCausalSection = renderCausalSection;
+
 // ── Mock data ─────────────────────────────────────────────────────────────
 const T0 = new Date('2026-10-08T12:00:00Z');
 const ts  = i => new Date(T0.getTime() + i * 1200).toISOString();
@@ -636,7 +997,36 @@ const MOCK_DATA = {
       { event_id: 'ev-102', event_type: 'tool_call', status: 'failure', latency_ms: 400.0, parent_id: 'ev-101', input_data: { tool: 'api_call', endpoint: '/external' }, output_data: { error: 'Connection timed out after 400 ms' }, agent_id: 'research-agent', timestamp: ts(1), metadata: { exception_type: 'TimeoutError', exception_message: 'Read timed out (connect=5, read=5)' } },
       { event_id: 'ev-103', event_type: 'retry',     status: 'success', latency_ms: 180.0, parent_id: 'ev-102', input_data: { retry_count: 1 }, output_data: { status: 'success on retry' }, agent_id: 'research-agent', timestamp: ts(2), metadata: { retry_of: 'ev-102' } },
       { event_id: 'ev-104', event_type: 'final_response', status: 'success', latency_ms: 99.2, parent_id: 'ev-103', input_data: {}, output_data: { answer: 'Partial answer retrieved after retry.' }, agent_id: 'research-agent', timestamp: ts(3), metadata: { retry_of: 'ev-102' } },
-    ]
+    ],
+    causal_graph: {
+      trace_id: 'ddee1122-0000-0000-0000-aabbccddeeff',
+      nodes: [
+        { event_id: 'ev-101', parent_id: null,     event_type: 'llm_call',       status: 'success', timestamp: ts(0), label: 'llm_call',            is_failure: false, suspicious_output: false, importance_score: 0.42, observation_level: 'full' },
+        { event_id: 'ev-102', parent_id: 'ev-101', event_type: 'tool_call',      status: 'failure', timestamp: ts(1), label: 'tool_call: api_call', is_failure: true,  suspicious_output: true,  importance_score: 0.95, observation_level: 'full', error_message: 'Connection timed out after 400 ms', exception_type: 'TimeoutError' },
+        { event_id: 'ev-103', parent_id: 'ev-102', event_type: 'retry',          status: 'success', timestamp: ts(2), label: 'retry: attempt 2',     is_failure: false, suspicious_output: false, importance_score: 0.60, observation_level: 'full' },
+        { event_id: 'ev-104', parent_id: 'ev-103', event_type: 'final_response', status: 'success', timestamp: ts(3), label: 'final_response',       is_failure: false, suspicious_output: false, importance_score: 0.90, observation_level: 'full' },
+      ],
+      edges: [
+        { source: 'ev-101', target: 'ev-102', relation: 'parent_of' },
+        { source: 'ev-102', target: 'ev-103', relation: 'parent_of' },
+        { source: 'ev-103', target: 'ev-104', relation: 'parent_of' },
+        { source: 'ev-102', target: 'ev-103', relation: 'retry_of' },
+        { source: 'ev-102', target: 'ev-103', relation: 'influenced' },
+      ],
+    },
+    root_cause: {
+      trace_id: 'ddee1122-0000-0000-0000-aabbccddeeff',
+      verdict: 'recovered',
+      root_cause_event_id: null,
+      confidence: 0.0,
+      category: 'none',
+      explanation: 'The failure in tool_call: api_call (event_type=tool_call, status=failure) was recovered by a later successful retry, so the trace has no unrecovered root cause. The recorded detail: error message "Connection timed out after 400 ms", exception type TimeoutError.',
+      evidence_path: [],
+      primary_failures: [],
+      secondary_failures: [],
+      affected_events: [],
+      recovered_failures: ['ev-102'],
+    },
   },
   full_failure: {
     trace_id: 'fail9999-0000-0000-0000-000000000000',
@@ -649,7 +1039,33 @@ const MOCK_DATA = {
       { event_id: 'ev-200', event_type: 'llm_call', status: 'success', latency_ms: 300.0, parent_id: null,     input_data: { prompt: 'Retrieve metrics from DB and summarise' }, output_data: { text: 'Planning DB query…' }, agent_id: 'fail-agent', timestamp: ts(0), metadata: {} },
       { event_id: 'ev-201', event_type: 'tool_call', status: 'failure', latency_ms: 550.0, parent_id: 'ev-200', input_data: { tool: 'db_query', query: 'SELECT * FROM metrics' }, output_data: { error: 'Database connection refused' }, agent_id: 'fail-agent', timestamp: ts(1), metadata: { exception_type: 'ConnectionRefusedError', exception_message: 'Connection refused on port 5432' } },
       { event_id: 'ev-202', event_type: 'error', status: 'failure', latency_ms: 2.5, parent_id: 'ev-201', input_data: { context: 'db failure' }, output_data: { error: 'Unrecoverable: cascading failure in data pipeline' }, agent_id: 'fail-agent', timestamp: ts(2), metadata: { exception_type: 'RuntimeError' } },
-    ]
+    ],
+    causal_graph: {
+      trace_id: 'fail9999-0000-0000-0000-000000000000',
+      nodes: [
+        { event_id: 'ev-200', parent_id: null,     event_type: 'llm_call',  status: 'success', timestamp: ts(0), label: 'llm_call',           is_failure: false, suspicious_output: false, importance_score: 0.35, observation_level: 'full' },
+        { event_id: 'ev-201', parent_id: 'ev-200', event_type: 'tool_call', status: 'failure', timestamp: ts(1), label: 'tool_call: db_query', is_failure: true,  suspicious_output: true,  importance_score: 0.98, observation_level: 'full', error_message: 'Database connection refused', exception_type: 'ConnectionRefusedError' },
+        { event_id: 'ev-202', parent_id: 'ev-201', event_type: 'error',     status: 'failure', timestamp: ts(2), label: 'error',               is_failure: true,  suspicious_output: true,  importance_score: 0.97, observation_level: 'full', error_message: 'Unrecoverable: cascading failure in data pipeline', exception_type: 'RuntimeError' },
+      ],
+      edges: [
+        { source: 'ev-200', target: 'ev-201', relation: 'parent_of' },
+        { source: 'ev-201', target: 'ev-202', relation: 'parent_of' },
+        { source: 'ev-201', target: 'ev-202', relation: 'influenced' },
+      ],
+    },
+    root_cause: {
+      trace_id: 'fail9999-0000-0000-0000-000000000000',
+      verdict: 'root_cause',
+      root_cause_event_id: 'ev-201',
+      confidence: 1.0,
+      category: 'tool_error',
+      explanation: 'The root cause is tool_call: db_query (event_type=tool_call, status=failure); its recorded detail: error message "Database connection refused", exception type ConnectionRefusedError. The failure propagated along the evidence path tool_call: db_query → error, affecting 0 downstream event(s) and 1 secondary failure(s).',
+      evidence_path: ['ev-201', 'ev-202'],
+      primary_failures: ['ev-201'],
+      secondary_failures: ['ev-202'],
+      affected_events: [],
+      recovered_failures: [],
+    },
   },
   backend_error: null
 };

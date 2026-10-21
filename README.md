@@ -88,6 +88,7 @@ mypy src/
 │   ├── collector.py        # Synchronous collector compatibility API
 │   ├── sdk_collector/      # Async collector, context, normalizer
 │   ├── observation/        # Adaptive observability: scoring + policy
+│   ├── causal/             # Causal graph + root-cause analysis
 │   ├── storage/            # In-memory and SQLite backends
 │   └── web_api.py          # FastAPI app
     ↓
@@ -611,5 +612,83 @@ through both modes (payload bytes **and** on-disk SQLite size are measured):
 | `tests/integration/test_observation_integration.py` | end-to-end: API surface, storage, SQLite round-trip, determinism |
 
 Full details and the evaluation write-up: [docs/phase10-adaptive-observability.md](docs/phase10-adaptive-observability.md).
+
+
+---
+
+## Phase 11 — Causal Analysis & Root-Cause Diagnosis
+
+Phase 11 turns a flat list of events into a **causal graph**, names the **root
+cause** of a failure with a grounded explanation, and draws the result in the
+dashboard.
+
+### How it works
+
+```
+events → build_graph() → CausalGraph → RootCauseAnalyzer.analyze() → RootCause
+                        (pure)         (rules only)                 verdict + evidence
+```
+
+The graph uses a closed set of relations — `parent_of`, `retry_of`,
+`depends_on` and `influenced` (an annotation for failure propagation). It is
+built by a pure function: the same events always produce the same graph, and a
+parent id that points outside the trace is ignored rather than invented.
+
+The analyzer is **rule-based** — no model is called — so the same trace always
+yields the same diagnosis. It reports one of four verdicts:
+
+| Verdict | Meaning |
+|---|---|
+| `root_cause` | a failure with a named cause, an evidence path and a confidence |
+| `no_failure` | the trace has no failed step |
+| `recovered` | every failure was followed by a successful retry |
+| `insufficient_evidence` | the cause cannot be pinned down — the analyzer says so instead of guessing |
+
+Explanations are templated and quote only recorded values. When the payload was
+not retained (adaptive observation), the explanation says *"no error detail was
+retained"* and the confidence is capped instead of a cause being invented.
+
+### API
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/traces/{trace_id}/causal-graph` | the graph (`nodes`, `edges`) |
+| `GET /api/traces/{trace_id}/root-cause` | the diagnosis |
+| `GET /api/traces/{trace_id}` | the trace plus the `causal_graph` and `root_cause` fields |
+
+The two extra fields are optional and included by default; opt out with
+`?include_causal_graph=false` / `?include_root_cause=false`. Every path fails
+open: a graph or diagnosis that cannot be produced is omitted and logged, never
+returned as a server error.
+
+### Dashboard
+
+Traces with a graph show a **Causal Analysis** section: the diagnosis on top,
+then a deterministic layered SVG of the graph with the root cause highlighted
+and the evidence path drawn in red. No new dependency, no build step. Traces
+without a graph hide the section entirely.
+
+### Measured effect
+
+`tests/benchmark_causal.py` compares the analyzer with the naive "first failure
+by wall-clock" baseline on seven labelled scenarios:
+
+| Metric | Causal graph | Chronological baseline |
+|---|---|---|
+| Root cause localized | **7/7** | 4/7 |
+| Root cause survives adaptive observation | **6/7** | — |
+| Explanations quoting the recorded error | **7/7** | — |
+| Analysis of a 10,000-event trace | 8.0 ms mean / 8.1 ms p95 | — |
+
+### Tests
+
+| Test file | Covers |
+|---|---|
+| `tests/test_causal_graph.py` | construction, edge taxonomy, determinism, traversal |
+| `tests/test_root_cause.py` | analyzer rules, verdicts, confidence, explanations |
+| `tests/test_causal_evaluation.py` | the labelled scenario set, H3, degradation, perf |
+| `tests/integration/test_causal_integration.py` | end-to-end: both endpoints, opt-out, fail-open |
+
+Full details and the evaluation write-up: [docs/phase11-causal-analysis.md](docs/phase11-causal-analysis.md).
 
 
