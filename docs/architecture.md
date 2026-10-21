@@ -212,27 +212,71 @@ See `docs/phase10-adaptive-observability.md` for the evaluation results.
 
 ### E. Causal Graph
 
-*Phase 3 feature:*
+*Phase 11 feature (in progress — graph layer complete):*
 
-Represent relationships between events:
+The causal graph makes the *structure* of a trace explicit, so a failure can be
+read as a chain of causes instead of a flat list of events. It is built by
+`agentlens.causal.graph.build_graph()` — a **pure** function over a list of
+events: no I/O, no mutation of its input, and the same events always produce
+the same graph.
 
-- `PARENT_OF`
-- `DEPENDS_ON`
-- `INFLUENCED`
-- `CAUSED`
-- `RETRIEVED_FOR`
-- `GENERATED_FROM`
+**Node** — one event, carrying its identity, status, timings, observation
+fields, a short label and (when recorded) the error message and exception type.
+
+**Edges** — a **closed** taxonomy of four relations:
+
+| Relation | Direction | Derived from | Traversed? |
+|---|---|---|---|
+| `parent_of` | parent → child | `event.parent_id` | yes |
+| `retry_of` | failed attempt → retry | `metadata["retry_of"]` | yes |
+| `depends_on` | node → dependency | `metadata["depends_on"]` | yes |
+| `influenced` | failed node → child | a failing parent (annotation) | no |
+
+`caused` is deliberately **not** a construction edge: it is the root-cause
+analyzer's *verdict* (see §F), never one of its inputs. `influenced`
+duplicates the `parent_of` direction and exists only so the UI can draw
+failure propagation differently — it never creates ancestry.
+
+**Guarantees:**
+
+- **Deterministic** — nodes are ordered by `(timestamp, event_id)`, edges by
+  `(relation, source, target)`; the input order does not matter.
+- **Grounded** — every edge is derived from recorded fields. A parent id or a
+  `retry_of` id outside the trace is ignored, never invented as a phantom node.
+- **Graceful with missing evidence** — a dropped event keeps its node (with its
+  `observation_level`) and its parent link, so the structure survives adaptive
+  observation even when the payload does not.
+- **Cycle-safe** — all traversal is iterative and visited-set guarded.
+
+**Traversal API** (the substrate the analyzer builds on):
+
+| Method | Meaning |
+|---|---|
+| `children(id)` / `parents(id)` | direct structural neighbours |
+| `ancestors(id)` / `descendants(id)` | everything reachable upstream / downstream |
+| `depth(id)` | length of the parent chain to a root (roots are `0`) |
+| `path(src, dst)` | shortest structural path, or `None` |
+| `failures()` | ids of every failed node |
+
+**HTTP surface:**
+
+- `GET /api/traces/{trace_id}/causal-graph` → `{trace_id, nodes[], edges[]}`
+- `GET /api/traces/{trace_id}` → additive `causal_graph` field
+  (opt out with `?include_causal_graph=false`)
+
+Graph construction never turns a trace request into a 5xx: if a graph cannot be
+built the field is omitted and the failure is logged (fail-open).
 
 **Example:**
 
 ```
-Incorrect Retrieval
+Incorrect Retrieval                 (failed)
         │
-        │ influenced
+        │ parent_of / influenced
         ▼
 LLM Decision
         │
-        │ caused
+        │ parent_of
         ▼
 Wrong Final Answer
 ```
@@ -396,6 +440,8 @@ AgentLens/
 │       ├── collector.py        # Event collection interface
 │       ├── normalizer.py       # (Phase 1+) Event normalization
 │       ├── storage/            # (Phase 1+) Storage backends
+│       ├── observation/        # (Phase 10+) Importance scoring & policy
+│       ├── causal/             # (Phase 11+) Causal graph & root-cause analysis
 │       ├── analysis/           # (Phase 4+) Failure diagnosis
 │       └── dashboard/          # (Phase 5+) Web API & frontend
 ├── examples/
