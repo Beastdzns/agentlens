@@ -114,7 +114,11 @@ class MultiStepResearchAgent:
             await self.collector.record_event(
                 event_type=EventType.MEMORY_WRITE,
                 input_data={"key": "retrieved_evidence"},
-                output_data={"document_count": len(retrieval_event.output_data or {})},
+                output_data={
+                    "document_count": len(
+                        (retrieval_event.output_data or {}).get("documents", [])
+                    )
+                },
                 latency_ms=2.0,
                 metadata={"step": "memory-write"},
             )

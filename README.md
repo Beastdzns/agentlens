@@ -49,13 +49,13 @@ Run with coverage:
 pytest --cov=src/agentlens --cov-report=html
 ```
 
-The current suite contains **411 Python tests** (events, collector, storage,
+The current suite contains **616 Python tests** (events, collector, storage,
 web API, failure capture, failure tracking, adaptive observability,
 integration). The frontend also ships a zero-build JavaScript test harness:
 
 ```bash
 # Open in a browser and read the summary at the top of the page
-xdg-open frontend/test.html        # 85 browser tests
+xdg-open frontend/test.html        # 227 browser tests
 ```
 
 ### Code Quality
@@ -82,7 +82,6 @@ mypy src/
 
 
 ```
-**Option 3 — Direct Uvicorn command**
 ├── src/agentlens/
 │   ├── events.py           # Event models and schemas
 │   ├── collector.py        # Synchronous collector compatibility API
