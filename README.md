@@ -87,6 +87,9 @@ mypy src/
 │   ├── events.py           # Event models and schemas
 │   ├── collector.py        # Synchronous collector compatibility API
 │   ├── sdk_collector/      # Async collector, context, normalizer
+│   ├── observation/        # Adaptive observability: scoring + policy
+│   ├── storage/            # In-memory and SQLite backends
+│   └── web_api.py          # FastAPI app
     ↓
 Adaptive Observation Engine
     ↓
@@ -107,8 +110,8 @@ See [docs/architecture.md](docs/architecture.md) for detailed design.
 | 6 | FastAPI API and simple web dashboard | Complete |
 | 7 | Live trace visualization (timeline, tree, filters) | Complete |
 | 8 | Failure tracking (capture, presentation, testing) | Complete |
-| 9 | Persistent storage | Planned |
-| 10 | Adaptive observability | Planned |
+| 9 | Persistent storage | Complete |
+| 10 | Adaptive observability | Complete |
 | 11 | Causal analysis and root-cause diagnosis | Planned |
 | 12 | Final web application and deployment | Planned |
 
@@ -315,7 +318,6 @@ pip install -e ".[dev]"
 
 - The current stores are in memory and reset when the server restarts.
 - LangChain and LlamaIndex normalizer adapters remain stubs.
-- Adaptive importance scoring and observation policies are planned.
 - Causal graph generation and automatic root-cause analysis are planned.
 - The dashboard currently uses vanilla JavaScript to keep the demo build-free.
 
@@ -323,7 +325,6 @@ pip install -e ".[dev]"
 
 - **LangChain adapter** — `EventNormalizer.from_langchain_event()` is a stub.
 - **LlamaIndex adapter** — `EventNormalizer.from_llamaindex_event()` is a stub.
-- **Importance scoring** — integrate with the `ObservationLevel` adaptive engine.
 - **Causal graph builder** — Phase 3: build Neo4j graph from parent/child event links.
 
 
@@ -539,5 +540,76 @@ UI shows a generic error banner rather than the failed timeline. Viewing a
 failed trace directly (via `GET /api/traces/{trace_id}`) or the **Full
 Failure** mock scenario demonstrates the full failure presentation. Returning
 the trace in the `502` payload is a candidate follow-up for Phase 9.
+
+
+---
+
+## Phase 10 — Adaptive Observability
+
+Phase 10 makes tracing **adaptive**: every event gets a deterministic
+importance score, and the payload is kept, compressed, reduced to metadata or
+dropped according to that score — without ever degrading the evidence needed
+to diagnose a failure.
+
+### How it works
+
+```
+Event → ImportanceScorer.score() → ObservationPolicy.decide() → ObservationPolicy.transform() → store
+```
+
+| Score | Observation level | Payload kept |
+|---|---|---|
+| `>= 0.60` | `full` | everything |
+| `>= 0.35` | `compressed` | truncated to `AGENTLENS_PAYLOAD_MAX_BYTES` (default 4 KB) |
+| `>= 0.15` | `metadata_only` | `input_data` / `output_data` nulled |
+| `< 0.15` | `drop` | payload nulled, `metadata = {"_dropped": true}` |
+
+`status == FAILURE` and the event types `ERROR`, `RETRY`, `FINAL_RESPONSE` are
+**always** observed in full, whatever their score. Dropped events keep their
+`event_id`, `trace_id`, `parent_id`, type, status, timestamp and latency, so
+the causal graph stays intact.
+
+### Enabling it
+
+Adaptive observability is **off by default** (`full` mode is a no-op). Turn it
+on with environment variables:
+
+```bash
+export AGENTLENS_OBSERVATION_POLICY=adaptive
+# optional tuning
+export AGENTLENS_COMPRESS_THRESHOLD=0.60
+export AGENTLENS_METADATA_THRESHOLD=0.35
+export AGENTLENS_DROP_THRESHOLD=0.15
+export AGENTLENS_PAYLOAD_MAX_BYTES=4096
+```
+
+Every event returned by the API then carries `importance_score` and
+`observation_level`, and a run response carries an `observation_summary`
+(count per level). The dashboard renders an observation badge and an
+importance bar on each event card.
+
+### Measured effect
+
+`tests/benchmark_observation.py` processes a 10,000-event synthetic trace
+through both modes (payload bytes **and** on-disk SQLite size are measured):
+
+| Metric | Full | Adaptive | Change |
+|---|---|---|---|
+| Events retained | 10,000 | 10,000 | unchanged |
+| Payload size | 10,887.6 KB | 617.3 KB | **−94.3 %** |
+| SQLite file size | 15,612 KB | 4,480 KB | **−71.3 %** |
+| Processing time | 0.106 s | 0.112 s | **+5.4 %** (≈ 0.6 µs/event) |
+| Diagnosis preserved | yes | yes | — |
+
+### Tests
+
+| Test file | Covers |
+|---|---|
+| `tests/test_importance_scoring.py` | scoring rules, modifiers, repetition penalty, clamping |
+| `tests/test_observation_policy.py` | threshold routing, D4 override, transformation, fail-open |
+| `tests/test_adaptive_evaluation.py` | evaluation invariants (evidence preserved, skeleton retained) |
+| `tests/integration/test_observation_integration.py` | end-to-end: API surface, storage, SQLite round-trip, determinism |
+
+Full details and the evaluation write-up: [docs/phase10-adaptive-observability.md](docs/phase10-adaptive-observability.md).
 
 

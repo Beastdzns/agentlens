@@ -169,7 +169,7 @@ Parent Agent
 
 ### D. Adaptive Observability
 
-*Phase 10 feature:*
+*Phase 10 feature (complete):*
 
 Events are classified into observation levels:
 
@@ -184,7 +184,7 @@ The policy is **rule-based** and **deterministic** (no ML/RL).
 score in `[0, 1]`:
 
 ```
-raw = base_by_status + weight_by_type + modifiers        # then clamp to [0, 1]
+raw = (base_by_status + weight_by_type) / 2 + modifiers   # then clamp to [0, 1]
 ```
 
 | Contribution | Value |
@@ -196,10 +196,19 @@ raw = base_by_status + weight_by_type + modifiers        # then clamp to [0, 1]
 | `exception_bonus` | `+0.10` when `metadata["exception_type"]` is set |
 | `repetition_penalty` | `−0.15 × min(repeat_index, 3)` for repeated SUCCESS events (FINAL_RESPONSE / DECISION exempt) |
 
+The two base contributions are **averaged, not summed**, so each stays an
+independent `0..1` axis and the score lines up with the policy thresholds
+(`0.60` FULL / `0.35` COMPRESSED / `0.15` METADATA_ONLY).
+
 Errors, failures, and retries therefore score highest and are never repetition
-penalised. All thresholds are configurable via `ScoringConfig`. Scoring is
-**inactive by default** — the collector only applies a scorer/policy when one is
-explicitly injected.
+penalised. The policy additionally forces `FAILURE`, `ERROR`, `RETRY` and
+`FINAL_RESPONSE` to **FULL** so diagnostic evidence is never degraded, and
+dropped events keep their identity and parent links so the causal graph stays
+intact. All thresholds are configurable via `ScoringConfig` / `PolicyConfig` and
+the `AGENTLENS_*` environment variables. Scoring and observation are **inactive
+by default** — the collector only applies them when explicitly injected.
+
+See `docs/phase10-adaptive-observability.md` for the evaluation results.
 
 ### E. Causal Graph
 
