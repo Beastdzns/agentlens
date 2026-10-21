@@ -212,7 +212,7 @@ See `docs/phase10-adaptive-observability.md` for the evaluation results.
 
 ### E. Causal Graph
 
-*Phase 11 feature (in progress — graph layer complete):*
+*Phase 11 feature:*
 
 The causal graph makes the *structure* of a trace explicit, so a failure can be
 read as a chain of causes instead of a flat list of events. It is built by
@@ -283,7 +283,7 @@ Wrong Final Answer
 
 ### F. Failure Diagnosis
 
-*Phase 11 feature (in progress — analyzer complete):*
+*Phase 11 feature:*
 
 When an agent fails, AgentLens answers: **"What caused the failure?"**
 
@@ -334,6 +334,35 @@ EVIDENCE PATH:
       ↓
   final_response
 ```
+
+### G. Causal Visualization
+
+*Phase 11 feature:*
+
+The dashboard renders the graph of §E and the diagnosis of §F as one panel
+(`frontend/app.js`, no build step and no new dependency).
+
+**Deterministic layered layout.** Every node is placed in the column of its
+parent — `parent_id` first, the `parent_of` edge as a fallback, a parent that
+is not part of the graph ignored (never invented, D9). Inside a column the
+rows are ordered by `(timestamp, event_id)`. The same graph therefore always
+draws the same picture: no physics, no randomness, no layout jitter between
+two renders of the same trace.
+
+**What the panel shows:**
+
+| Element | Meaning |
+|---|---|
+| Diagnosis strip | verdict, confidence, category, grounded explanation, evidence path |
+| Red ring + `ROOT CAUSE` tag | the event the analyzer named |
+| Red edges | the evidence path from the root cause to the deepest failure |
+| Dashed red edges | `influenced` — failure propagation |
+| Dashed amber / dotted blue | `retry_of` / `depends_on` |
+| Red node | a failed step |
+
+**Graceful degradation.** A trace recorded before Phase 11 has no graph: the
+section is hidden rather than shown empty, and the rest of the dashboard is
+unaffected. Labels are HTML-escaped.
 
 ## Functional Requirements
 
@@ -476,11 +505,18 @@ AgentLens/
 │       └── dashboard/          # (Phase 5+) Web API & frontend
 ├── examples/
 │   └── simple_agent.py         # Example agent
+├── frontend/                   # Vanilla-JS dashboard (no build step)
+│   ├── index.html              # Dashboard
+│   ├── app.js                  # Rendering + causal panel
+│   ├── style.css               # Styles
+│   └── test.html               # Browser test harness
 ├── tests/
-│   └── test_*.py               # Unit & integration tests
+│   ├── test_*.py               # Unit & integration tests
+│   ├── causal_scenarios.py     # (Phase 11+) Labelled evaluation scenarios
+│   └── benchmark_*.py          # (Phase 10+) Measurement harnesses
 ├── docs/
 │   ├── architecture.md         # This file
-│   └── phases.md               # Phase details
+│   └── phase*.md               # Phase details
 ├── pyproject.toml              # Project metadata & dependencies
 ├── README.md                   # Quick start
 └── .gitignore                  # Git ignore rules
@@ -488,5 +524,5 @@ AgentLens/
 
 ---
 
-**Project Status:** Phase 1 Repository Skeleton  
-**Last Updated:** 2026-08-31
+**Project Status:** Phase 11 — Causal Analysis & Root-Cause Diagnosis
+**Last Updated:** 2026-10-22
