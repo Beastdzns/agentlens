@@ -145,7 +145,11 @@ dmypy.json
 # Project specific
 .agentlens_env
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
 logs/
 output/
 
