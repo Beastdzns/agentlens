@@ -847,6 +847,113 @@ function testFocusFailedSteps() {
   activeFilter = 'all';
 }
 
+/* ── Causal graph interactivity (Phase 12) ─────────────────── */
+
+function testCausalAncestors() {
+  const edges = [
+    { source: 'a', target: 'b', relation: 'parent_of' },
+    { source: 'b', target: 'c', relation: 'parent_of' },
+    { source: 'a', target: 'd', relation: 'parent_of' },
+    { source: 'c', target: 'e', relation: 'retry_of' },
+  ];
+  assertEqual([...causalAncestors(edges, 'c')].sort().join(','), 'a,b', 'ancestors: parents and grandparents');
+  assertEqual([...causalDescendants(edges, 'a')].sort().join(','), 'b,c,d,e', 'descendants: children and grandchildren');
+  assertEqual(causalAncestors(edges, 'a').size, 0, 'ancestors: root has none');
+  assertEqual(causalDescendants(edges, 'e').size, 0, 'descendants: leaf has none');
+  const cycle = [{ source: 'x', target: 'y', relation: 'parent_of' }, { source: 'y', target: 'x', relation: 'parent_of' }];
+  assertEqual(causalAncestors(cycle, 'x').size, 1, 'ancestors: a cycle is handled without hanging');
+  assertEqual(causalDescendants(cycle, 'x').size, 1, 'descendants: a cycle is handled without hanging');
+  assertEqual(causalAncestors([], 'x').size, 0, 'ancestors: no edges means no ancestors');
+}
+
+function testCausalTooltipHtml() {
+  const node = { event_id: 'n-2', event_type: 'tool_call', label: 'tool_call: db_query', latency_ms: 400, error_message: 'Connection refused' };
+  const html = causalTooltipHtml(node);
+  assert(html.includes('tool_call: db_query'), 'tooltip: the node label is shown');
+  assert(html.includes('tool_call'), 'tooltip: the event type is shown');
+  assert(html.includes('400.0 ms'), 'tooltip: the latency is shown');
+  assert(html.includes('Connection refused'), 'tooltip: the error message is shown');
+
+  const clean = { event_id: 'n-1', event_type: 'llm_call', label: 'llm_call', latency_ms: 25 };
+  assert(causalTooltipHtml(clean).includes('tt-error') === false, 'tooltip: no error line without an error');
+}
+
+function testRenderCausalNodeDetails() {
+  const node = {
+    event_id: 'n-2', event_type: 'tool_call', status: 'failure', timestamp: testTs(1), latency_ms: 400,
+    label: 'tool_call: db_query', error_message: 'Connection refused', exception_type: 'ConnectionError', importance_score: 0.95,
+  };
+  const html = renderCausalNodeDetails(node);
+  assert(html.includes('tool_call: db_query'), 'details: the node label is shown');
+  assert(html.includes('Connection refused'), 'details: the error message is shown');
+  assert(html.includes('400.0 ms'), 'details: the latency is shown');
+  assert(html.includes('data-action="show-in-timeline"'), 'details: the timeline action is present');
+  assertEqual(renderCausalNodeDetails(null), '<div class="causal-node-details hidden"></div>', 'details: a null node is hidden');
+}
+
+function testCausalSelectHighlightsPath() {
+  const panel = document.getElementById('causalPanel');
+  panel.innerHTML = renderCausalPanel({
+    causal_graph: {
+      trace_id: 'cg-0',
+      nodes: [
+        { event_id: 'n-1', parent_id: null, event_type: 'llm_call', status: 'success', timestamp: testTs(0), label: 'llm_call', importance_score: 0.5 },
+        { event_id: 'n-2', parent_id: 'n-1', event_type: 'tool_call', status: 'failure', timestamp: testTs(1), label: 'tool_call', importance_score: 0.9, error_message: 'Connection refused' },
+        { event_id: 'n-3', parent_id: 'n-2', event_type: 'error', status: 'failure', timestamp: testTs(2), label: 'error', importance_score: 0.95 },
+        { event_id: 'n-4', parent_id: 'n-1', event_type: 'retrieval', status: 'success', timestamp: testTs(1), label: 'retrieval', importance_score: 0.4 },
+      ],
+      edges: [
+        { source: 'n-1', target: 'n-2', relation: 'parent_of' },
+        { source: 'n-2', target: 'n-3', relation: 'parent_of' },
+        { source: 'n-1', target: 'n-4', relation: 'parent_of' },
+      ],
+    },
+    root_cause: makeRootCause(),
+  });
+
+  selectCausal('n-2');
+  const nodes = panel.querySelectorAll('.cg-node');
+  const ids = [...nodes].map(n => n.dataset.eventId).sort();
+  assertEqual(ids.join(','), 'n-1,n-2,n-3,n-4', 'select: all nodes are rendered');
+  const dimmed = [...nodes].filter(n => n.classList.contains('cg-dim'));
+  assertEqual(dimmed.map(n => n.dataset.eventId).join(','), 'n-4', 'select: only the off-path branch is dimmed');
+  const selected = [...nodes].filter(n => n.classList.contains('cg-selected'));
+  assertEqual(selected.length, 1, 'select: exactly one node is selected');
+  assertEqual(selected[0].dataset.eventId, 'n-2', 'select: the clicked node is selected');
+
+  const details = document.getElementById('causalNodeDetails');
+  assert(!details.classList.contains('hidden'), 'details: shown when a node is selected');
+  assert(details.innerHTML.includes('tool_call'), 'details: shows the selected node');
+  assert(details.innerHTML.includes('Connection refused'), 'details: shows the error');
+
+  selectCausal(null);
+  assertEqual(panel.querySelectorAll('.cg-dim').length, 0, 'deselect: no dimmed nodes');
+  assert(document.getElementById('causalNodeDetails').classList.contains('hidden'), 'deselect: details hidden');
+
+  panel.innerHTML = '';
+  lastCausalGraph = null;
+  causalSelectedId = null;
+}
+
+function testCausalFocusInTimeline() {
+  sortedEvents = [
+    makeEvent({ event_id: 'ev-a', status: 'success' }),
+    makeEvent({ event_id: 'ev-b', status: 'failure' }),
+  ];
+  lastData = { events: sortedEvents };
+  let threw = false;
+  try {
+    focusEventInTimeline('ev-b');
+  } catch (e) {
+    threw = true;
+    console.error(e);
+  }
+  assert(!threw, 'focus timeline: does not throw when the event card is not in the DOM');
+  sortedEvents = [];
+  lastData = null;
+  activeFilter = 'all';
+}
+
 /* ── Run all tests ───────────────────────────────────────────── */
 
 async function runAllTests() {
@@ -885,6 +992,11 @@ async function runAllTests() {
   testRootCausePanel();
   testCausalPanel();
   testCausalSectionVisibility();
+  testCausalAncestors();
+  testCausalTooltipHtml();
+  testRenderCausalNodeDetails();
+  testCausalSelectHighlightsPath();
+  testCausalFocusInTimeline();
   testBuildTraceHistoryQuery();
   testReadHistoryFilters();
   testFormatTraceTime();
