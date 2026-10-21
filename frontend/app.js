@@ -374,6 +374,37 @@ function renderFailureSummary(data, events) {
   failureSummary.classList.remove('hidden');
 }
 window.renderFailureSummary = renderFailureSummary;
+
+// ── Adaptive observability: observation level + importance ────────────────
+// Observation levels (Phase 10): FULL / COMPRESSED / METADATA_ONLY / DROP.
+// Events without a level (e.g. traces recorded before Phase 10) are FULL.
+
+const OBS_LEVEL_LABELS = {
+  full: 'FULL',
+  compressed: 'COMP',
+  metadata_only: 'META',
+  drop: 'DROP',
+};
+
+function buildObservationBadge(ev) {
+  const level = String(ev.observation_level || 'full').toLowerCase();
+  const label = OBS_LEVEL_LABELS[level] || level.toUpperCase();
+  return `<span class="obs-level-badge obs-level-${level}" title="Observation level: ${level}">${label}</span>`;
+}
+
+function buildImportanceBar(ev) {
+  const score = typeof ev.importance_score === 'number' ? ev.importance_score : null;
+  if (score === null) return '';
+  const pct = Math.max(0, Math.min(100, score * 100)).toFixed(0);
+  return `<span class="importance-bar-wrap" title="Importance score: ${score.toFixed(2)}">
+           <span class="importance-bar-track"><span class="importance-bar-fill" style="width:${pct}%"></span></span>
+           <span class="importance-bar-label">${score.toFixed(2)}</span>
+         </span>`;
+}
+
+window.buildObservationBadge = buildObservationBadge;
+window.buildImportanceBar = buildImportanceBar;
+
 // ── Render the event timeline ─────────────────────────────────────────────
 function renderEventList() {
   const events   = filterEvents(sortedEvents, activeFilter);
@@ -403,20 +434,9 @@ function renderEventList() {
     // Data display section
     const dataSection = isLlm ? buildLlmBlock(ev) : buildJsonBlock(ev);
 
-    // Observation level badge
-    const obsLevel   = (ev.observation_level || 'full').toLowerCase();
-    const obsLabels  = { full: 'FULL', compressed: 'COMP', metadata_only: 'META', drop: 'DROP' };
-    const obsLabel   = obsLabels[obsLevel] || obsLevel.toUpperCase();
-    const obsLevelBadge = `<span class="obs-level-badge obs-level-${obsLevel}" title="Observation level: ${obsLevel}">${obsLabel}</span>`;
-
-    // Importance score mini-bar
-    const score      = typeof ev.importance_score === 'number' ? ev.importance_score : null;
-    const importanceBar = score !== null
-      ? `<span class="importance-bar-wrap" title="Importance score: ${score.toFixed(2)}">
-           <span class="importance-bar-track"><span class="importance-bar-fill" style="width:${(score * 100).toFixed(0)}%"></span></span>
-           <span class="importance-bar-label">${score.toFixed(2)}</span>
-         </span>`
-      : '';
+    // Observation level badge + importance score bar
+    const obsLevelBadge = buildObservationBadge(ev);
+    const importanceBar = buildImportanceBar(ev);
 
     return `
       <div class="tl-row" style="--depth:${depth}" id="tl-row-${idx}">

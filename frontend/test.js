@@ -387,6 +387,58 @@ function testBuildFailureBlockRetriedBy() {
   assert(html.includes('TimeoutError'),   'failure block: still shows exception type');
 }
 
+/* ── Adaptive observability: observation badge + importance bar ───────── */
+
+function testObservationBadgeLabels() {
+  assert(buildObservationBadge(makeEvent({ observation_level: 'full' })).includes('>FULL<'),
+         'obs badge: full -> FULL');
+  assert(buildObservationBadge(makeEvent({ observation_level: 'compressed' })).includes('>COMP<'),
+         'obs badge: compressed -> COMP');
+  assert(buildObservationBadge(makeEvent({ observation_level: 'metadata_only' })).includes('>META<'),
+         'obs badge: metadata_only -> META');
+  assert(buildObservationBadge(makeEvent({ observation_level: 'drop' })).includes('>DROP<'),
+         'obs badge: drop -> DROP');
+}
+
+function testObservationBadgeDefault() {
+  const html = buildObservationBadge(makeEvent({ observation_level: undefined }));
+  assert(html.includes('obs-level-full'), 'obs badge: missing level defaults to full');
+  assert(html.includes('>FULL<'),          'obs badge: missing level shows FULL');
+  assert(buildObservationBadge(makeEvent({ observation_level: 'COMPRESSED' })).includes('>COMP<'),
+         'obs badge: level is case-insensitive');
+}
+
+function testImportanceBar() {
+  const html = buildImportanceBar(makeEvent({ importance_score: 0.75 }));
+  assert(html.includes('width:75%'), 'importance bar: fill width matches the score');
+  assert(html.includes('>0.75<'),   'importance bar: shows the numeric score');
+  assert(buildImportanceBar(makeEvent({ importance_score: undefined })) === '',
+         'importance bar: omitted when the score is missing');
+  assert(buildImportanceBar(makeEvent({ importance_score: 'high' })) === '',
+         'importance bar: omitted when the score is not a number');
+}
+
+function testRenderEventListShowsObservationBadges() {
+  sortedEvents = [
+    makeEvent({ event_id: 'o-1', observation_level: 'full',         importance_score: 0.90 }),
+    makeEvent({ event_id: 'o-2', observation_level: 'metadata_only', importance_score: 0.20 }),
+    makeEvent({ event_id: 'o-3', observation_level: 'drop',         importance_score: 0.05 }),
+  ];
+  activeFilter = 'all';
+
+  renderEventList();
+  const html = eventList.innerHTML;
+
+  assert(html.includes('obs-level-full'),         'event list: renders the observation badge');
+  assert(html.includes('obs-level-metadata_only'),'event list: renders a metadata-only badge');
+  assert(html.includes('obs-level-drop'),         'event list: renders a dropped-event badge');
+  assert(html.includes('importance-bar-fill'),    'event list: renders the importance bar');
+  assert(html.includes('importance-bar-label'),   'event list: renders the importance score label');
+
+  sortedEvents = [];
+  activeFilter = 'all';
+}
+
 /* ── Run all tests ───────────────────────────────────────────── */
 
 function runAllTests() {
@@ -411,5 +463,9 @@ function runAllTests() {
   testBuildFailureBlockFields();
   testBuildFailureBlockRetryBadges();
   testBuildFailureBlockRetriedBy();
+  testObservationBadgeLabels();
+  testObservationBadgeDefault();
+  testImportanceBar();
+  testRenderEventListShowsObservationBadges();
   renderReport();
 }
