@@ -8,6 +8,8 @@ Covers:
 - Repetition penalty, its cap, and its exemptions.
 - Clamping to ``[0, 1]``.
 - Determinism and custom configuration.
+- The relationship between the score and the policy thresholds
+  (``0.60`` FULL / ``0.35`` COMPRESSED / ``0.15`` METADATA_ONLY).
 
 The scorer is pure, so these are fast unit tests with no I/O.
 """
@@ -30,15 +32,21 @@ from agentlens.observation import (
 # A non-null parent id; used to switch the parent bonus off in isolation tests.
 PARENT = uuid4()
 
+# Policy thresholds (see agentlens.observation.policy.PolicyConfig).
+COMPRESS_THRESHOLD = 0.60
+METADATA_THRESHOLD = 0.35
+DROP_THRESHOLD = 0.15
+
 
 def _flat_config(**overrides: Any) -> ScoringConfig:
     """
-    Config with zero base/bonuses so a single rule can be tested in isolation.
+    Config with equal base/weight so a single rule can be tested in isolation.
 
-    Every status contributes ``0.0`` and every event type ``0.5`` by default.
+    Every status contributes ``0.5`` and every event type ``0.5`` by default,
+    which averages to a neutral score of ``0.5`` before any modifier.
     """
     params: dict[str, Any] = {
-        "base_by_status": dict.fromkeys(EventStatus, 0.0),
+        "base_by_status": dict.fromkeys(EventStatus, 0.5),
         "weight_by_type": dict.fromkeys(EventType, 0.5),
         "parent_bonus": 0.0,
         "latency_bonus": 0.0,
@@ -129,9 +137,9 @@ class TestBaseScoring:
     """Test status- and type-driven scoring with the default config."""
 
     def test_success_llm_call_baseline(self, sample_event) -> None:
-        # 0.30 (success) + 0.50 (llm_call) + 0.10 (root, no parent)
+        # (0.30 success + 0.50 llm_call) / 2 + 0.10 root (no parent)
         event = sample_event(event_type=EventType.LLM_CALL, status=EventStatus.SUCCESS)
-        assert ImportanceScorer().score(event) == pytest.approx(0.90)
+        assert ImportanceScorer().score(event) == pytest.approx(0.50)
 
     def test_failure_scores_above_success(self, sample_event) -> None:
         scorer = ImportanceScorer()
@@ -147,20 +155,72 @@ class TestBaseScoring:
         scorer = ImportanceScorer()
         err = sample_event(event_type=EventType.ERROR, parent_id=PARENT)
         llm = sample_event(event_type=EventType.LLM_CALL, parent_id=PARENT)
-        assert scorer.score(err) == pytest.approx(1.0)
+        assert scorer.score(err) == pytest.approx(0.65)
         assert scorer.score(err) > scorer.score(llm)
 
     def test_retry_event_scores_high(self, sample_event) -> None:
         scorer = ImportanceScorer()
         retry = sample_event(event_type=EventType.RETRY, parent_id=PARENT)
         llm = sample_event(event_type=EventType.LLM_CALL, parent_id=PARENT)
+        assert scorer.score(retry) == pytest.approx(0.575)
         assert scorer.score(retry) > scorer.score(llm)
 
     def test_memory_read_scores_low(self, sample_event) -> None:
         scorer = ImportanceScorer()
         mem = sample_event(event_type=EventType.MEMORY_READ, parent_id=PARENT)
         llm = sample_event(event_type=EventType.LLM_CALL, parent_id=PARENT)
+        assert scorer.score(mem) == pytest.approx(0.325)
         assert scorer.score(mem) < scorer.score(llm)
+
+    def test_base_and_weight_are_averaged(self, sample_event) -> None:
+        """The score is the mean of the status base and the type weight."""
+        scorer = ImportanceScorer()
+        event = sample_event(
+            event_type=EventType.TOOL_CALL,
+            status=EventStatus.PARTIAL,
+            parent_id=PARENT,
+            latency_ms=10.0,
+        )
+        # (0.70 partial + 0.55 tool_call) / 2
+        assert scorer.score(event) == pytest.approx(0.625)
+
+
+class TestScoreThresholdAlignment:
+    """The score distribution must line up with the frozen policy thresholds."""
+
+    def test_error_reaches_full_threshold(self, sample_event) -> None:
+        event = sample_event(event_type=EventType.ERROR, parent_id=PARENT)
+        assert ImportanceScorer().score(event) >= COMPRESS_THRESHOLD
+
+    def test_failure_reaches_full_threshold(self, sample_event) -> None:
+        event = sample_event(
+            event_type=EventType.LLM_CALL, status=EventStatus.FAILURE, parent_id=PARENT
+        )
+        assert ImportanceScorer().score(event) >= COMPRESS_THRESHOLD
+
+    def test_final_response_reaches_full_threshold(self, sample_event) -> None:
+        event = sample_event(event_type=EventType.FINAL_RESPONSE, parent_id=PARENT)
+        assert ImportanceScorer().score(event) >= COMPRESS_THRESHOLD
+
+    def test_benign_success_stays_below_full_threshold(self, sample_event) -> None:
+        """Ordinary successful steps must be reducible, else adaptive is a no-op."""
+        event = sample_event(event_type=EventType.LLM_CALL, parent_id=PARENT)
+        score = ImportanceScorer().score(event)
+        assert score < COMPRESS_THRESHOLD
+        assert score >= METADATA_THRESHOLD
+
+    def test_repetitive_memory_read_falls_below_metadata_threshold(self, sample_event) -> None:
+        """A repeated low-value step drops out of the COMPRESSED band."""
+        event = sample_event(event_type=EventType.MEMORY_READ, parent_id=PARENT)
+        score = ImportanceScorer().score(event, repeat_index=1)
+        assert score < METADATA_THRESHOLD
+        assert score >= DROP_THRESHOLD
+
+    def test_heavily_repeated_step_reaches_drop_band(self, sample_event) -> None:
+        """Repeated enough, a low-value step falls into the DROP band."""
+        event = sample_event(event_type=EventType.MEMORY_READ, parent_id=PARENT)
+        score = ImportanceScorer().score(event, repeat_index=3)
+        assert score < DROP_THRESHOLD
 
 
 # ============================================================================
@@ -179,23 +239,23 @@ class TestModifiers:
 
     def test_parent_bonus_absent_when_parent_set(self, sample_event) -> None:
         event = sample_event(parent_id=PARENT)
-        assert ImportanceScorer().score(event) == pytest.approx(0.80)
+        assert ImportanceScorer().score(event) == pytest.approx(0.40)
 
     def test_latency_bonus_at_threshold(self, sample_event) -> None:
         event = sample_event(parent_id=PARENT, latency_ms=1000.0)
-        assert ImportanceScorer().score(event) == pytest.approx(0.90)
+        assert ImportanceScorer().score(event) == pytest.approx(0.50)
 
     def test_latency_bonus_above_threshold(self, sample_event) -> None:
         event = sample_event(parent_id=PARENT, latency_ms=5000.0)
-        assert ImportanceScorer().score(event) == pytest.approx(0.90)
+        assert ImportanceScorer().score(event) == pytest.approx(0.50)
 
     def test_no_latency_bonus_below_threshold(self, sample_event) -> None:
         event = sample_event(parent_id=PARENT, latency_ms=999.0)
-        assert ImportanceScorer().score(event) == pytest.approx(0.80)
+        assert ImportanceScorer().score(event) == pytest.approx(0.40)
 
     def test_no_latency_bonus_when_latency_missing(self, sample_event) -> None:
         event = sample_event(parent_id=PARENT, latency_ms=None)
-        assert ImportanceScorer().score(event) == pytest.approx(0.80)
+        assert ImportanceScorer().score(event) == pytest.approx(0.40)
 
     def test_exception_bonus_applied(self, sample_event) -> None:
         event = sample_event(
@@ -203,17 +263,17 @@ class TestModifiers:
             latency_ms=100.0,
             metadata={"exception_type": "ValueError"},
         )
-        assert ImportanceScorer().score(event) == pytest.approx(0.90)
+        assert ImportanceScorer().score(event) == pytest.approx(0.50)
 
     def test_no_exception_bonus_without_metadata(self, sample_event) -> None:
         event = sample_event(parent_id=PARENT, latency_ms=100.0, metadata=None)
-        assert ImportanceScorer().score(event) == pytest.approx(0.80)
+        assert ImportanceScorer().score(event) == pytest.approx(0.40)
 
     def test_no_exception_bonus_when_key_absent(self, sample_event) -> None:
         event = sample_event(
             parent_id=PARENT, latency_ms=100.0, metadata={"other": "value"}
         )
-        assert ImportanceScorer().score(event) == pytest.approx(0.80)
+        assert ImportanceScorer().score(event) == pytest.approx(0.40)
 
     def test_modifiers_are_additive(self, sample_event) -> None:
         scorer = ImportanceScorer(
@@ -228,7 +288,7 @@ class TestModifiers:
             latency_ms=5000.0,
             metadata={"exception_type": "TimeoutError"},
         )
-        # 0.5 (weight) + 0.10 + 0.05 + 0.03
+        # 0.5 (neutral) + 0.10 + 0.05 + 0.03
         assert scorer.score(event) == pytest.approx(0.68)
 
 
@@ -311,6 +371,7 @@ class TestClamping:
     def test_low_scores_clamp_to_zero(self, sample_event) -> None:
         scorer = ImportanceScorer(
             _flat_config(
+                base_by_status=dict.fromkeys(EventStatus, 0.0),
                 weight_by_type=dict.fromkeys(EventType, 0.0),
                 repetition_penalty=0.5,
                 repetition_cap=3,
@@ -322,6 +383,7 @@ class TestClamping:
     def test_custom_max_score(self, sample_event) -> None:
         scorer = ImportanceScorer(
             _flat_config(
+                base_by_status=dict.fromkeys(EventStatus, 1.0),
                 weight_by_type=dict.fromkeys(EventType, 0.9),
                 max_score=0.75,
             )
@@ -341,25 +403,23 @@ class TestCustomConfig:
     def test_custom_status_base_respected(self, sample_event) -> None:
         scorer = ImportanceScorer(
             _flat_config(
-                base_by_status=dict.fromkeys(EventStatus, 0.0)
-                | {EventStatus.SUCCESS: 0.4},
+                base_by_status=dict.fromkeys(EventStatus, 0.0) | {EventStatus.SUCCESS: 0.4},
                 weight_by_type=dict.fromkeys(EventType, 0.0),
             )
         )
         event = sample_event(parent_id=PARENT, latency_ms=10.0)
-        assert scorer.score(event) == pytest.approx(0.40)
+        assert scorer.score(event) == pytest.approx(0.20)
 
     def test_custom_type_weight_respected(self, sample_event) -> None:
         scorer = ImportanceScorer(
             _flat_config(
-                weight_by_type=dict.fromkeys(EventType, 0.5)
-                | {EventType.LLM_CALL: 0.9}
+                weight_by_type=dict.fromkeys(EventType, 0.5) | {EventType.LLM_CALL: 0.9}
             )
         )
         event = sample_event(
             event_type=EventType.LLM_CALL, parent_id=PARENT, latency_ms=10.0
         )
-        assert scorer.score(event) == pytest.approx(0.90)
+        assert scorer.score(event) == pytest.approx(0.70)
 
     def test_custom_parent_bonus_respected(self, sample_event) -> None:
         scorer = ImportanceScorer(_flat_config(parent_bonus=0.25))

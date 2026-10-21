@@ -17,8 +17,15 @@ Scoring is intentionally:
 
 Scoring rule
 ------------
-``raw = base_by_status + weight_by_type + modifiers`` then clamped to
-``[min_score, max_score]``. Modifiers:
+``raw = (base_by_status + weight_by_type) / 2 + modifiers`` then clamped to
+``[min_score, max_score]``.
+
+The two base contributions are averaged (not summed) so that each of them acts
+as an independent ``0..1`` axis. That keeps the score on a ``0..1`` scale where
+the frozen policy thresholds (``0.60`` FULL / ``0.35`` COMPRESSED / ``0.15``
+METADATA_ONLY) separate ordinary steps from failures and final answers.
+
+Modifiers:
 
 - ``+parent_bonus`` when ``parent_id is None`` (a structural anchor / root step).
 - ``+latency_bonus`` when ``latency_ms >= latency_high_ms`` (slow step).
@@ -29,7 +36,8 @@ Scoring rule
 
 Failure / error / retry events naturally score highest: they combine a high
 ``base_by_status`` with a high ``weight_by_type`` and are never repetition
-penalised.
+penalised. The observation policy additionally forces them to ``FULL``
+(see :mod:`agentlens.observation.policy`).
 """
 
 from __future__ import annotations
@@ -138,8 +146,9 @@ class ImportanceScorer:
             range (``[0, 1]`` by default).
         """
         cfg = self._config
-        score = cfg.base_by_status.get(event.status, 0.0)
-        score += cfg.weight_by_type.get(event.event_type, 0.0)
+        base = cfg.base_by_status.get(event.status, 0.30)
+        type_weight = cfg.weight_by_type.get(event.event_type, 0.50)
+        score = (base + type_weight) / 2.0
 
         if event.parent_id is None:
             score += cfg.parent_bonus

@@ -834,3 +834,105 @@ class TestTraceHistoryApiIntegration:
                 client.get("/api/traces", params={"start_date": "not-a-date"}).status_code
                 == 400
             )
+
+
+# ===========================================================================
+# Adaptive observation policy - end-to-end integration
+# ===========================================================================
+
+
+@pytest.mark.integration
+class TestAdaptiveObservationIntegration:
+    """End-to-end integration tests for AGENTLENS_OBSERVATION_POLICY=adaptive.
+
+    These tests run the full collector + policy + storage stack and verify:
+    - Events are saved with importance_score and observation_level populated.
+    - D4 guarantee: FAILURE events always have observation_level=full.
+    - API exposes both fields in the serialized event payload.
+    - observation_summary is present in the RunResponse.
+    """
+
+    @pytest.mark.asyncio
+    async def test_adaptive_events_have_observation_fields(self, monkeypatch):
+        """Events in adaptive mode carry importance_score and observation_level."""
+        monkeypatch.setenv("AGENTLENS_OBSERVATION_POLICY", "adaptive")
+
+        from agentlens.events import EventType, EventStatus
+        from agentlens.observation import build_policy_and_scorer
+        from agentlens.sdk_collector.collector import EventCollector
+        from agentlens.storage import InMemoryEventStore, InMemoryTraceStore
+
+        store = InMemoryEventStore()
+        scorer, policy = build_policy_and_scorer()
+        collector = EventCollector(storage_backend=store, scorer=scorer, policy=policy)
+
+        await collector.start_trace(agent_id="integration-agent")
+        ev = await collector.record_event(
+            event_type=EventType.LLM_CALL,
+            input_data={"prompt": "hello"},
+            output_data={"response": "world"},
+            status=EventStatus.SUCCESS,
+        )
+        await collector.end_trace()
+
+        # importance_score must be in [0, 1] and level must be an ObservationLevel.
+        from agentlens.events import ObservationLevel
+        assert 0.0 <= ev.importance_score <= 1.0
+        assert isinstance(ev.observation_level, ObservationLevel)
+
+    @pytest.mark.asyncio
+    async def test_d4_failure_always_full(self, monkeypatch):
+        """D4: FAILURE events are always FULL, regardless of score."""
+        monkeypatch.setenv("AGENTLENS_OBSERVATION_POLICY", "adaptive")
+
+        from agentlens.events import EventType, EventStatus, ObservationLevel
+        from agentlens.observation import build_policy_and_scorer
+        from agentlens.sdk_collector.collector import EventCollector
+        from agentlens.storage import InMemoryEventStore
+
+        store = InMemoryEventStore()
+        scorer, policy = build_policy_and_scorer()
+        collector = EventCollector(storage_backend=store, scorer=scorer, policy=policy)
+
+        await collector.start_trace(agent_id="failure-agent")
+        ev = await collector.record_event(
+            event_type=EventType.LLM_CALL,
+            status=EventStatus.FAILURE,
+            metadata={"exception_type": "RuntimeError", "exception_message": "boom"},
+        )
+        await collector.end_trace()
+
+        assert ev.observation_level == ObservationLevel.FULL
+
+    @pytest.mark.asyncio
+    async def test_api_exposes_observation_fields(self, monkeypatch):
+        """API /api/run returns importance_score and observation_level per event."""
+        monkeypatch.setenv("AGENTLENS_OBSERVATION_POLICY", "adaptive")
+        # Force the deterministic offline runner (a real key in .env would
+        # otherwise trigger a live Gemini call).
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+        from fastapi.testclient import TestClient
+        from agentlens.web_api import app
+
+        # NOTE: the module is deliberately *not* reloaded here.  Reloading
+        # ``agentlens.web_api`` rebinds the module-level ``event_store`` /
+        # ``trace_store`` singletons, which breaks the identity-sensitive
+        # tests in ``tests/test_web_api.py``.  The observation policy is built
+        # per request (``_AgentRunner.__init__``), so the env var above is
+        # picked up without a reload.
+        with TestClient(app) as client:
+            resp = client.post("/api/run", json={"query": "test adaptive"})
+            assert resp.status_code == 200
+            data = resp.json()
+
+            # observation_summary should be present
+            assert "observation_summary" in data
+            assert isinstance(data["observation_summary"], dict)
+
+            # Each event must have both fields
+            for ev in data["events"]:
+                assert "importance_score" in ev, f"Missing importance_score in {ev}"
+                assert "observation_level" in ev, f"Missing observation_level in {ev}"
+                assert isinstance(ev["importance_score"], float)
+                assert ev["observation_level"] in ("full", "compressed", "metadata_only", "drop")

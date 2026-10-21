@@ -29,6 +29,7 @@ Design Principles
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import functools
 import inspect
@@ -132,7 +133,13 @@ class EventCollector:
     # Shared module-level context manager (ContextVar-backed, task-isolated).
     _ctx: ContextManager = ContextManager()
 
-    def __init__(self, storage_backend: Any = None) -> None:
+    def __init__(
+        self,
+        storage_backend: Any = None,
+        *,
+        scorer: Any = None,
+        policy: Any = None,
+    ) -> None:
         """
         Initialise the collector.
 
@@ -140,8 +147,19 @@ class EventCollector:
             storage_backend: Optional async storage interface.  Must expose
                 ``async save(event: AgentEvent) -> None``.  Injected rather
                 than created here so the collector stays testable.
+            scorer: Optional :class:`~agentlens.observation.ImportanceScorer`.
+                When supplied (together with *policy*), each event is scored
+                and transformed before storage.
+            policy: Optional :class:`~agentlens.observation.ObservationPolicy`.
+                Paired with *scorer* to route events to an observation level.
         """
         self._storage = storage_backend
+        self._scorer = scorer
+        self._policy = policy
+        # Per-trace repeat counters: trace_id (str) -> {event_type -> count}
+        # defaultdict keeps this async-safe without explicit locking because
+        # asyncio is single-threaded within an event loop.
+        self._repeat_counters: dict[str, collections.Counter] = {}
 
     # ------------------------------------------------------------------
     # Trace lifecycle
@@ -170,6 +188,8 @@ class EventCollector:
         resolved_id = trace_id if trace_id is not None else uuid4()
         self._ctx.set_trace_id(resolved_id)
         self._ctx.set_agent_id(agent_id)
+        # Initialise a fresh repeat counter for this trace.
+        self._repeat_counters[str(resolved_id)] = collections.Counter()
         return resolved_id
 
     async def end_trace(self) -> None:
@@ -178,6 +198,10 @@ class EventCollector:
 
         Safe to call even if no trace was started (no-op in that case).
         """
+        # Clean up the repeat counter for this trace.
+        tid = self._ctx.get_trace_id()
+        if tid is not None:
+            self._repeat_counters.pop(str(tid), None)
         self._ctx.clear()
 
     # ------------------------------------------------------------------
@@ -243,6 +267,28 @@ class EventCollector:
             parent_id=parent_id,
             metadata=metadata,
         )
+
+        # --- Observation policy (D7: fail-open) ---------------------------------
+        if self._scorer is not None and self._policy is not None:
+            try:
+                tid_str = str(trace_id)
+                counter = self._repeat_counters.setdefault(tid_str, collections.Counter())
+                repeat_idx = counter[event_type]
+                counter[event_type] += 1
+
+                score = self._scorer.score(event, repeat_index=repeat_idx)
+                event = event.model_copy(update={"importance_score": score})
+
+                level = self._policy.decide(score, event)
+                event = self._policy.transform(event, level)
+            except Exception as obs_exc:  # noqa: BLE001
+                warnings.warn(
+                    f"AgentLens: observation policy failed for event "
+                    f"({event.event_id}): {obs_exc!r}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        # ------------------------------------------------------------------------
 
         # Persist (fail-open).
         if self._storage is not None:
