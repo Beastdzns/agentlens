@@ -224,6 +224,14 @@ class RunResponse(BaseModel):
     status: str
     # Optional observation level summary (populated in adaptive mode).
     observation_summary: Optional[dict[str, int]] = None
+    # Set when the run failed.  The trace is still returned so the dashboard
+    # can show the causal analysis of the failure.
+    error: Optional[str] = None
+    # Optional causal graph (Phase 11).  Additive, same rules as the trace
+    # response: omitted when the graph cannot be built (fail-open, D8).
+    causal_graph: Optional["CausalGraphResponse"] = None
+    # Optional root-cause diagnosis (Phase 11).  Additive, same rules.
+    root_cause: Optional["RootCauseResponse"] = None
 
 
 class TraceResponse(BaseModel):
@@ -328,6 +336,21 @@ class TraceListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class AgentRunFailed(Exception):
+    """
+    Raised when the agent pipeline fails *inside* a traced run.
+
+    The failed trace has already been persisted when this is raised, so the
+    exception carries its id: the API can then return the trace (with its
+    causal graph and root-cause diagnosis) instead of throwing the run away.
+    """
+
+    def __init__(self, trace_id: str, cause: BaseException) -> None:
+        super().__init__(f"{type(cause).__name__}: {cause}")
+        self.trace_id = trace_id
+        self.cause = cause
+
+
 class _AgentRunner:
     """Runs the multi-step research agent and returns a completed Trace."""
 
@@ -356,12 +379,18 @@ class _AgentRunner:
 
         The single outer ``except`` block is now responsible *only* for calling
         ``end_trace`` and persisting the trace as ``FAILURE`` — the per-step
-        wrappers handle the granular failure recording.
+        wrappers handle the granular failure recording.  It then raises
+        :class:`AgentRunFailed`, which carries the id of the persisted failed
+        trace so the caller can return it instead of losing the run.
 
         **Retry linkage**: when retrying a step after a failure, pass
         ``retry_of=<failed_event_id>`` and an incremented ``attempt`` counter to
         the wrapper.  Both values are stored in the new event's metadata so the
         UI can trace the retry chain.
+
+        Raises:
+            AgentRunFailed: when a pipeline step fails.  The failed trace has
+                already been persisted when this is raised.
         """
         collector = EventCollector(storage_backend=self._event_store,
                                    scorer=self._scorer,
@@ -443,14 +472,10 @@ class _AgentRunner:
                     ]
                 }
 
-            # Record a dedicated TOOL_CALL event for parent-linkage purposes.
-            search_event = await collector.record_event(
-                event_type=EventType.TOOL_CALL,
-                input_data={"tool": "web_search", "query": query},
-                output_data=search_result[0],
-                latency_ms=0.0,
-                metadata={"step": "search", "tool": "web_search"},
-            )
+            # The capture wrapper already recorded the TOOL_CALL event — with
+            # the real timing and the output.  Reuse it instead of recording a
+            # second, duplicate event for the same step.
+            search_event = collector.last_event
 
             # ------------------------------------------------------------------
             # Step 3 — Retrieval
@@ -467,37 +492,29 @@ class _AgentRunner:
                 EventType.RETRIEVAL,
                 input_data={"top_k": 3, "query": query},
                 metadata={"step": "retrieval"},
-            ):
-                pass  # Simulated retrieval — no external I/O
+            ) as retrieval_result:
+                # Simulated retrieval — no external I/O.
+                retrieval_result[0] = retrieval_docs
 
-            retrieval_event = await collector.record_event(
-                event_type=EventType.RETRIEVAL,
-                input_data={"top_k": 3, "query": query},
-                output_data=retrieval_docs,
-                latency_ms=0.0,
-                metadata={"step": "retrieval"},
-            )
+            retrieval_event = collector.last_event
             collector.pop_parent()
 
             # ------------------------------------------------------------------
             # Step 4 — Memory write
             # ------------------------------------------------------------------
+            collector.push_parent(retrieval_event.event_id)
             async with collector.capture_step(
                 EventType.MEMORY_WRITE,
                 input_data={"key": "retrieved_evidence"},
                 metadata={"step": "memory-write"},
-            ):
-                pass  # In-memory store, no external I/O
-
-            await collector.record_event(
-                event_type=EventType.MEMORY_WRITE,
-                input_data={"key": "retrieved_evidence"},
-                output_data={
-                    "document_count": len(retrieval_event.output_data or {})
-                },
-                latency_ms=2.0,
-                metadata={"step": "memory-write"},
-            )
+            ) as memory_result:
+                # In-memory store, no external I/O.
+                memory_result[0] = {
+                    "document_count": len(
+                        (retrieval_event.output_data or {}).get("documents", [])
+                    )
+                }
+            memory_event = collector.last_event
             collector.pop_parent()
 
             # ------------------------------------------------------------------
@@ -518,6 +535,7 @@ class _AgentRunner:
                 f"Query: {query}\nPlan: {plan}\n"
                 f"Evidence: {retrieval_event.output_data}"
             )
+            collector.push_parent(memory_event.event_id)
             async with collector.capture_llm_call(
                 prompt=query,
                 model=model_name,
@@ -529,26 +547,24 @@ class _AgentRunner:
                     "planning, retrieval, and synthesis.",
                 )
             answer = synthesis_result[0]
+            synthesis_event = collector.last_event
+            collector.pop_parent()
 
             # ------------------------------------------------------------------
             # Step 6 — Final response
             # ------------------------------------------------------------------
+            collector.push_parent(synthesis_event.event_id)
             async with collector.capture_step(
                 EventType.FINAL_RESPONSE,
                 metadata={"step": "final-response"},
-            ):
-                pass  # No work; the wrapper records the SUCCESS bookend
-
-            await collector.record_event(
-                event_type=EventType.FINAL_RESPONSE,
-                output_data={"answer": answer},
-                latency_ms=0.0,
-                metadata={"step": "final-response"},
-            )
+            ) as final_result:
+                # No work; the wrapper records the SUCCESS bookend.
+                final_result[0] = {"answer": answer}
+            collector.pop_parent()
 
             await collector.end_trace()
 
-        except Exception:
+        except Exception as exc:
             # Each per-step wrapper already recorded a FAILURE event (with
             # exception_type + exception_message) before re-raising, so the
             # trace contains exactly one FAILURE event for the broken step.
@@ -566,7 +582,9 @@ class _AgentRunner:
             )
             failed_trace.finalize(EventStatus.FAILURE)
             await self._trace_store.save_trace(failed_trace)
-            raise
+            # The failed trace is persisted — tell the caller which trace to
+            # look at instead of losing the whole run.
+            raise AgentRunFailed(str(trace_id), exc) from exc
 
         # --- Assemble and persist the Trace object -------------------------
         stored_events = await self._event_store.get_trace_events(trace_id)
@@ -734,11 +752,32 @@ def _extract_answer(trace: Trace) -> str:
 
 @app.post("/api/run", response_model=RunResponse)
 async def run_agent(body: RunRequest) -> RunResponse:
-    """Run the multi-step research agent and return the complete trace."""
+    """
+    Run the multi-step research agent and return the complete trace.
+
+    A run that fails *inside* the pipeline is **not** an HTTP error: the
+    failed trace is persisted by the runner, so it is returned like any other
+    run — with ``status="failure"``, the error message and the causal
+    analysis.  That is what lets the dashboard show *why* a run failed
+    instead of a bare "something went wrong".
+
+    Only a failure of the run *machinery* itself (no trace, no store) is
+    reported as ``502``.
+    """
     runner = _AgentRunner(event_store, trace_store)
 
+    error: Optional[str] = None
     try:
         trace = await runner.run(body.query)
+    except AgentRunFailed as exc:
+        try:
+            trace = await trace_store.get_trace(UUID(exc.trace_id))
+        except KeyError:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Agent execution failed: {exc}",
+            ) from exc
+        error = str(exc)
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -753,13 +792,17 @@ async def run_agent(body: RunRequest) -> RunResponse:
     for ev in serialized:
         obs_summary[ev.observation_level] = obs_summary.get(ev.observation_level, 0) + 1
 
+    trace_id = str(trace.trace_id)
     return RunResponse(
-        trace_id=str(trace.trace_id),
+        trace_id=trace_id,
         response=_extract_answer(trace),
         events=serialized,
         total_latency_ms=trace.total_latency_ms,
-        status="success",
+        status="failure" if trace.status == EventStatus.FAILURE else "success",
         observation_summary=obs_summary,
+        error=error,
+        causal_graph=_build_causal_graph_response(trace_id, trace.events),
+        root_cause=_analyze_root_cause(trace_id, trace.events),
     )
 
 

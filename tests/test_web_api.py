@@ -194,8 +194,15 @@ class TestRunEndpoint:
         response = client.post("/api/run", json={})
         assert response.status_code == 422
 
-    def test_gemini_failure_returns_502(self, client: TestClient):
-        """When Gemini raises an exception the API should return 502."""
+    def test_gemini_failure_returns_the_failed_trace(self, client: TestClient):
+        """
+        A run that fails inside the pipeline is not an HTTP error.
+
+        The failed trace is persisted, so the API returns it like any other
+        run — with ``status="failure"`` and the error message.  The dashboard
+        can then show the causal analysis of the failure instead of a bare
+        "something went wrong".
+        """
         fake_client = MagicMock()
         fake_client.models.generate_content.side_effect = RuntimeError(
             "Gemini quota exceeded"
@@ -213,8 +220,17 @@ class TestRunEndpoint:
                         json={"query": "trigger gemini failure"},
                     )
 
-        assert response.status_code == 502
-        assert "Agent execution failed" in response.json()["detail"]
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "failure"
+        assert body["trace_id"]
+        assert "Gemini quota exceeded" in body["error"]
+
+        # The failed trace is retrievable and carries the causal analysis.
+        trace = client.get(f"/api/traces/{body['trace_id']}")
+        assert trace.status_code == 200
+        assert trace.json()["status"] == "failure"
+        assert trace.json()["root_cause"]["verdict"] == "root_cause"
 
 
 # ---------------------------------------------------------------------------

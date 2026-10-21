@@ -445,9 +445,12 @@ class TestPipelineFailureCapture:
                         json={"query": "trigger gemini failure"},
                     )
 
-        # HTTP layer must return 502.
-        assert response.status_code == 502
-        assert "Agent execution failed" in response.json()["detail"]
+        # The HTTP layer returns the failed run (not a bare 502): the trace
+        # exists and carries the failure, so it is handed back to the caller.
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "failure"
+        assert "Gemini quota exceeded" in body["error"]
 
         # The trace must have been persisted as FAILURE.
         assert len(trace_store._traces) == 1
