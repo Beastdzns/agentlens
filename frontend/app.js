@@ -952,7 +952,7 @@ function renderCausalGraph(graph, rootCause) {
 
   parts.push(
     `<svg class="causal-svg" viewBox="0 0 ${layout.width} ${layout.height}" ` +
-    `preserveAspectRatio="xMinYMin meet" role="img" ` +
+    `preserveAspectRatio="xMidYMid meet" role="img" ` +
     `aria-label="Causal graph of the trace" data-testid="causal-svg">`
   );
   parts.push(
@@ -1333,7 +1333,7 @@ function selectCausal(id) {
     e.classList.toggle('cg-dim', id != null && !(path.has(e.dataset.source) && path.has(e.dataset.target)));
   });
 
-  const details = document.getElementById('causalNodeDetails');
+  const details = container.querySelector('.causal-node-details');
   if (!nodeOf(id)) {
     if (details) details.classList.add('hidden');
     return;
@@ -1386,12 +1386,12 @@ window.renderCausalNodeDetails = renderCausalNodeDetails;
  * Show the tooltip for a hovered node, following the pointer.
  */
 function showCausalTooltip(ev, id) {
-  const tooltip = document.getElementById('causalTooltip');
+  const container = getCausalContainer();
+  const tooltip = container && container.querySelector('.causal-tooltip');
   if (!tooltip || !lastCausalGraph) return;
   const node = nodeOf(id);
   if (!node) return;
   tooltip.innerHTML = causalTooltipHtml(node);
-  const container = getCausalContainer();
   const rect = container ? container.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
   let x = Math.min(Math.max(ev.clientX - rect.left + 14, 8), Math.max(rect.width - 10, 0));
   let y = Math.min(Math.max(ev.clientY - rect.top + 14, 8), Math.max(rect.height - 10, 0));
@@ -1406,7 +1406,7 @@ function clearCausalHighlight() {
   if (!container) return;
   container.querySelectorAll('.cg-node').forEach(n => n.classList.remove('cg-dim'));
   container.querySelectorAll('.cg-edge').forEach(e => e.classList.remove('cg-dim'));
-  const tooltip = document.getElementById('causalTooltip');
+  const tooltip = container.querySelector('.causal-tooltip');
   if (tooltip) tooltip.classList.add('hidden');
 }
 window.clearCausalHighlight = clearCausalHighlight;
@@ -1537,12 +1537,6 @@ function toggleCausalFullscreen() {
     cfsOverlay.classList.remove('hidden');
     cfsActive = true;
     document.body.style.overflow = 'hidden';
-    // Make the graph SVG fill the available width inside the overlay.
-    const svg = cfsContent.querySelector('.causal-svg');
-    if (svg) {
-      svg.style.width = '100%';
-      svg.style.maxWidth = 'none';
-    }
   } else {
     // Exit fullscreen
     cfsOverlay.classList.add('hidden');
