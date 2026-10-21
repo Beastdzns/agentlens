@@ -617,9 +617,239 @@ function testCausalSectionVisibility() {
   assert(causalSection.classList.contains('hidden'), 'causal section: hidden again after a trace without a graph');
 }
 
+/* ── Trace history (Phase 12) ───────────────────────────────────────── */
+
+function testBuildTraceHistoryQuery() {
+  const q = buildTraceHistoryQuery({ status: 'all' }, null, 20);
+  assert(q.includes('limit=20'), 'history query: the page size is always sent');
+  assert(!q.includes('status='), 'history query: "all" does not filter by status');
+
+  const filtered = buildTraceHistoryQuery(
+    { status: 'failure', startDate: '2026-10-01', endDate: '2026-10-08' },
+    'abc',
+    10
+  );
+  assert(filtered.includes('status=failure'), 'history query: the status filter is sent');
+  assert(filtered.includes('start_date=2026-10-01'), 'history query: the start date is sent');
+  assert(filtered.includes('end_date=2026-10-08'), 'history query: the end date is sent');
+  assert(filtered.includes('cursor=abc'), 'history query: the pagination cursor is sent');
+  assert(filtered.includes('limit=10'), 'history query: an explicit page size wins');
+
+  const empty = buildTraceHistoryQuery({}, null, 20);
+  assert(!empty.includes('start_date='), 'history query: an empty filter sends no date');
+  assert(!empty.includes('cursor='), 'history query: no cursor is sent on the first page');
+}
+
+function testReadHistoryFilters() {
+  historyStatus.value = 'failure';
+  historyFrom.value = '2026-10-01';
+  historyTo.value = '2026-10-08';
+  const filters = readHistoryFilters();
+  assertEqual(filters.status, 'failure', 'history filters: the status is read');
+  assertEqual(filters.startDate, '2026-10-01', 'history filters: the start date is read');
+  assertEqual(filters.endDate, '2026-10-08', 'history filters: the end date is read');
+
+  historyStatus.value = '';
+  historyFrom.value = '';
+  historyTo.value = '';
+  const cleared = readHistoryFilters();
+  assertEqual(cleared.status, 'all', 'history filters: an empty status means "all"');
+  assertEqual(cleared.startDate, '', 'history filters: an empty start date stays empty');
+}
+
+function testFormatTraceTime() {
+  assertEqual(formatTraceTime(null), '—', 'history time: no timestamp -> dash');
+  assertEqual(formatTraceTime(''), '—', 'history time: empty timestamp -> dash');
+  assert(formatTraceTime('not-a-date') === 'not-a-date', 'history time: an invalid date is shown as-is');
+  assert(formatTraceTime(testTs(0)).length > 0, 'history time: a valid timestamp is formatted');
+}
+
+function testRenderHistoryItems() {
+  const items = [
+    { trace_id: 'aaaaaaaa-1111-2222-3333-444444444444', agent_id: 'demo-agent', status: 'success',
+      start_time: testTs(0), event_count: 7, total_latency_ms: 12.5 },
+    { trace_id: 'bbbbbbbb-1111-2222-3333-444444444444', agent_id: 'demo-agent', status: 'failure',
+      start_time: testTs(1), event_count: 3, total_latency_ms: 900 },
+  ];
+  const html = renderHistoryItems(items);
+
+  assert(html.includes('data-trace-id="aaaaaaaa-1111-2222-3333-444444444444"'),
+         'history rows: each row carries its trace id');
+  assert(html.includes('status-success'), 'history rows: a successful trace is styled');
+  assert(html.includes('status-failure'), 'history rows: a failed trace is styled');
+  assert(html.includes('demo-agent'), 'history rows: the agent is shown');
+  assert(html.includes('7 ev'), 'history rows: the event count is shown');
+  assert(html.includes('900.0 ms'), 'history rows: the latency is shown');
+  assertEqual((html.match(/class="history-item/g) || []).length, 2, 'history rows: one row per trace');
+
+  assert(renderHistoryItems([]).includes('No traces match'), 'history rows: an empty list explains itself');
+  assert(renderHistoryItems(null).includes('No traces match'), 'history rows: a missing list explains itself');
+}
+
+function testRenderHistoryItemsEscapesHtml() {
+  const html = renderHistoryItems([
+    { trace_id: '<script>alert(1)</script>', agent_id: '<img src=x onerror=1>', status: 'success',
+      start_time: null, event_count: 0, total_latency_ms: 0 },
+  ]);
+  assert(!html.includes('<script>'), 'history rows: the trace id is escaped');
+  assert(html.includes('&lt;script&gt;'), 'history rows: the escaped trace id is rendered as text');
+  assert(!html.includes('<img'), 'history rows: the agent id is escaped');
+}
+
+function testRenderHistoryState() {
+  historyItems = [
+    { trace_id: 't-1', agent_id: 'demo-agent', status: 'success', start_time: testTs(0),
+      event_count: 2, total_latency_ms: 1 },
+    { trace_id: 't-2', agent_id: 'demo-agent', status: 'failure', start_time: testTs(1),
+      event_count: 3, total_latency_ms: 2 },
+  ];
+  historyCount = 7;
+  historyCursor = 'next-page';
+  renderHistory();
+
+  assert(historyList.innerHTML.includes('t-1'), 'history: the rows are painted');
+  assert(historyMeta.textContent.includes('2 of 7'), 'history: the meta line counts the loaded traces');
+  assert(!historyMore.classList.contains('hidden'), 'history: "load more" is offered while a cursor exists');
+
+  historyCursor = null;
+  renderHistory();
+  assert(historyMore.classList.contains('hidden'), 'history: "load more" disappears on the last page');
+}
+
+function testRenderHistoryError() {
+  renderHistoryError(new Error('backend offline'));
+  assert(historyList.innerHTML.includes('backend offline'), 'history: the error is shown');
+  assert(historyMore.classList.contains('hidden'), 'history: "load more" is hidden after an error');
+  assertEqual(historyMeta.textContent, '', 'history: the meta line is cleared after an error');
+}
+
+async function testHistoryLoading() {
+  const calls = [];
+  const originalFetch = window.fetch;
+  window.fetch = (url) => {
+    calls.push(String(url));
+    if (calls.length === 1) {
+      return Promise.resolve({
+        ok: true, status: 200,
+        json: () => Promise.resolve({
+          items: [
+            { trace_id: 'trace-1', agent_id: 'demo-agent', status: 'success', start_time: testTs(0),
+              event_count: 7, total_latency_ms: 12.5 },
+            { trace_id: 'trace-2', agent_id: 'demo-agent', status: 'failure', start_time: testTs(1),
+              event_count: 3, total_latency_ms: 900 },
+          ],
+          count: 3,
+          next_cursor: 'cursor-1',
+        }),
+      });
+    }
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: () => Promise.resolve({
+        items: [
+          { trace_id: 'trace-3', agent_id: 'demo-agent', status: 'success', start_time: testTs(2),
+            event_count: 2, total_latency_ms: 5 },
+        ],
+        count: 3,
+        next_cursor: null,
+      }),
+    });
+  };
+
+  historyStatus.value = '';
+  historyFrom.value = '';
+  historyTo.value = '';
+
+  await loadHistory(false);
+  assertEqual(historyItems.length, 2, 'history load: the first page is loaded');
+  assertEqual(historyCursor, 'cursor-1', 'history load: the next cursor is kept');
+  assertEqual(historyCount, 3, 'history load: the total count is kept');
+  assert(calls[0].includes('/api/traces?'), 'history load: the traces endpoint is called');
+  assert(historyList.innerHTML.includes('trace-1'), 'history load: the rows are rendered');
+
+  await loadHistory(true);
+  assertEqual(historyItems.length, 3, 'history load: "load more" appends the next page');
+  assertEqual(historyCursor, null, 'history load: the cursor is cleared on the last page');
+  assert(calls[1].includes('cursor=cursor-1'), 'history load: the cursor is sent with the request');
+
+  window.fetch = originalFetch;
+  historyItems = [];
+  historyCount = 0;
+  historyCursor = null;
+}
+
+async function testHistoryLoadingFailure() {
+  const originalFetch = window.fetch;
+  window.fetch = () => Promise.resolve({ ok: false, status: 500, statusText: 'Server Error' });
+
+  await loadHistory(false);
+  assert(historyList.innerHTML.includes('Could not load traces'), 'history load: an HTTP error is reported');
+
+  window.fetch = originalFetch;
+}
+
+/* ── Live-run failure state (Phase 12) ──────────────────────────────── */
+
+function testRenderRunFailureMarkup() {
+  const data = {
+    status: 'failure',
+    error: 'RuntimeError: Gemini quota exceeded',
+    causal_graph: makeGraph(),
+    root_cause: makeRootCause(),
+  };
+  const html = renderRunFailureMarkup(data);
+
+  assert(html.includes('Run failed'), 'failure state: the state is titled');
+  assert(html.includes('Gemini quota exceeded'), 'failure state: the error message is shown');
+  assert(html.includes('Root cause identified'), 'failure state: the verdict is shown');
+  assert(html.includes('The root cause is tool_call: db_query.'), 'failure state: the explanation is shown');
+  assert(html.includes('>0.80<'), 'failure state: the confidence is shown');
+  assert(html.includes('tool_error'), 'failure state: the category is shown');
+  assert(html.includes('data-action="show-causal"'), 'failure state: the causal analysis is linked');
+  assert(html.includes('data-action="show-failures"'), 'failure state: the failed steps are linked');
+}
+
+function testRenderRunFailureMarkupVariants() {
+  assertEqual(renderRunFailureMarkup({ status: 'success' }), '',
+              'failure state: a successful run has no failure state');
+  assertEqual(renderRunFailureMarkup(null), '',
+              'failure state: no data has no failure state');
+
+  const noGraph = renderRunFailureMarkup({ status: 'failure', error: 'boom' });
+  assert(noGraph.includes('boom'), 'failure state: the error is shown without a diagnosis');
+  assert(!noGraph.includes('data-action="show-causal"'),
+         'failure state: the causal link is hidden when there is no graph');
+
+  const noError = renderRunFailureMarkup({ status: 'failure', causal_graph: makeGraph(), root_cause: makeRootCause() });
+  assert(noError.includes('Run failed'), 'failure state: a failure without a message still shows the state');
+  assert(!noError.includes('rf-error'), 'failure state: no error line without a message');
+}
+
+function testRenderRunFailureVisibility() {
+  renderRunFailure({ status: 'failure', error: 'boom', causal_graph: makeGraph(), root_cause: makeRootCause() });
+  assert(!runFailure.classList.contains('hidden'), 'failure state: it is shown for a failed run');
+  assert(runFailure.innerHTML.includes('boom'), 'failure state: the panel carries the error');
+
+  renderRunFailure({ status: 'success' });
+  assert(runFailure.classList.contains('hidden'), 'failure state: it is hidden for a successful run');
+  assertEqual(runFailure.innerHTML, '', 'failure state: it is cleared for a successful run');
+}
+
+function testFocusFailedSteps() {
+  sortedEvents = [
+    makeEvent({ event_id: 'ok-1', status: 'success' }),
+    makeEvent({ event_id: 'bad-1', status: 'failure' }),
+  ];
+  activeFilter = 'all';
+  focusFailedSteps();
+  assertEqual(activeFilter, 'failure', 'failure state: the timeline is filtered to the failures');
+  sortedEvents = [];
+  activeFilter = 'all';
+}
+
 /* ── Run all tests ───────────────────────────────────────────── */
 
-function runAllTests() {
+async function runAllTests() {
   testSortEvents();
   testStatusClass();
   testFormatLatency();
@@ -655,5 +885,22 @@ function runAllTests() {
   testRootCausePanel();
   testCausalPanel();
   testCausalSectionVisibility();
+  testBuildTraceHistoryQuery();
+  testReadHistoryFilters();
+  testFormatTraceTime();
+  testRenderHistoryItems();
+  testRenderHistoryItemsEscapesHtml();
+  testRenderHistoryState();
+  testRenderHistoryError();
+  testRenderRunFailureMarkup();
+  testRenderRunFailureMarkupVariants();
+  testRenderRunFailureVisibility();
+  testFocusFailedSteps();
+  try {
+    await testHistoryLoading();
+    await testHistoryLoadingFailure();
+  } catch (error) {
+    assert(false, 'history loading: unexpected error — ' + (error && error.message));
+  }
   renderReport();
 }

@@ -72,7 +72,9 @@
      'dismissError','resultsView','loadingStep','apiStatus','apiStatusText',
      'statTraceId','statLatency','statEventCount','statStatus','responseText',
      'eventList','traceMeta','metaTraceId','metaStatus','metaLatency','metaEventCount',
-     'failureSummary','causalSection','causalPanel'
+     'failureSummary','causalSection','causalPanel','runFailure',
+     'historySection','historyRefresh','historyStatus','historyFrom','historyTo',
+     'historyMeta','historyList','historyMore'
     ].forEach(id => {
       const orig = document.getElementById.bind(document);
       if (!orig(id)) {

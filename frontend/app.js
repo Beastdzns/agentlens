@@ -169,6 +169,17 @@ const metaEventCount = document.getElementById('metaEventCount');
 const causalSection  = document.getElementById('causalSection');
 const causalPanel    = document.getElementById('causalPanel');
 
+const runFailure     = document.getElementById('runFailure');
+
+const historySection = document.getElementById('historySection');
+const historyRefresh = document.getElementById('historyRefresh');
+const historyStatus  = document.getElementById('historyStatus');
+const historyFrom    = document.getElementById('historyFrom');
+const historyTo      = document.getElementById('historyTo');
+const historyMeta    = document.getElementById('historyMeta');
+const historyList    = document.getElementById('historyList');
+const historyMore    = document.getElementById('historyMore');
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 function escHtml(str) {
   return String(str)
@@ -302,6 +313,9 @@ function renderResults(data) {
 
   // -- Failure summary banner (shows above timeline for failed traces)
   renderFailureSummary(data, sortedEvents);
+
+  // -- Live-run failure state (why the run failed + pointer to the analysis)
+  renderRunFailure(data);
 
   // -- Causal analysis panel (Phase 11) — hidden when the trace has no graph
   renderCausalSection(data);
@@ -966,6 +980,313 @@ function renderCausalSection(data) {
 }
 window.renderCausalSection = renderCausalSection;
 
+// ── Live-run failure state (Phase 12) ─────────────────────────────────────
+/**
+ * Build the failure state of a run.
+ *
+ * A failing run is *not* a request error: the API returns the failed trace
+ * (status="failure", the error message, the causal graph and the root-cause
+ * diagnosis).  This panel explains what went wrong and points at the causal
+ * analysis instead of leaving the user with a bare error banner.
+ *
+ * @param {object} data  the API response of the run
+ * @returns {string}     the markup ('' when the run did not fail)
+ */
+function renderRunFailureMarkup(data) {
+  if (!data || statusClass(data.status) !== 'failure') return '';
+
+  const rootCause = data.root_cause || null;
+  const graph = data.causal_graph || null;
+  const hasGraph = !!(graph && Array.isArray(graph.nodes) && graph.nodes.length);
+  const verdict = rootCause
+    ? (CAUSAL_VERDICT_LABEL[rootCause.verdict] || rootCause.verdict)
+    : null;
+
+  const parts = [];
+  parts.push('<div class="rf-head">');
+  parts.push(
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">' +
+    '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>' +
+    '<line x1="12" y1="16" x2="12.01" y2="16"/></svg>'
+  );
+  parts.push('<span class="rf-title">Run failed</span>');
+  if (verdict) parts.push(`<span class="rf-verdict">${escHtml(verdict)}</span>`);
+  parts.push('</div>');
+
+  if (data.error) {
+    parts.push(`<p class="rf-error">${escHtml(String(data.error))}</p>`);
+  }
+  if (rootCause && rootCause.explanation) {
+    parts.push(`<p class="rf-explanation">${escHtml(String(rootCause.explanation))}</p>`);
+  }
+  if (rootCause && typeof rootCause.confidence === 'number' && rootCause.confidence > 0) {
+    parts.push(
+      '<p class="rf-confidence">Diagnosis confidence ' +
+      `<b>${rootCause.confidence.toFixed(2)}</b> · category ` +
+      `<code>${escHtml(rootCause.category || 'none')}</code></p>`
+    );
+  }
+
+  parts.push('<div class="rf-actions">');
+  if (hasGraph) {
+    parts.push(
+      '<button type="button" class="rf-btn rf-btn-primary" data-action="show-causal">' +
+      'Show causal analysis →</button>'
+    );
+  }
+  parts.push(
+    '<button type="button" class="rf-btn" data-action="show-failures">Show failed steps</button>'
+  );
+  parts.push('</div>');
+  return parts.join('');
+}
+window.renderRunFailureMarkup = renderRunFailureMarkup;
+
+/**
+ * Show or hide the failure state of the current run.
+ *
+ * @param {object} data  the API response of the run
+ */
+function renderRunFailure(data) {
+  if (!runFailure) return;
+  const markup = renderRunFailureMarkup(data);
+  if (!markup) {
+    runFailure.classList.add('hidden');
+    runFailure.innerHTML = '';
+    return;
+  }
+  runFailure.innerHTML = markup;
+  runFailure.classList.remove('hidden');
+}
+window.renderRunFailure = renderRunFailure;
+
+/**
+ * Scroll to the causal analysis and highlight it.
+ */
+function focusCausalAnalysis() {
+  if (!causalSection) return;
+  if (causalSection.scrollIntoView) {
+    causalSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  causalSection.classList.add('causal-flash');
+  window.setTimeout(() => causalSection.classList.remove('causal-flash'), 1800);
+}
+window.focusCausalAnalysis = focusCausalAnalysis;
+
+/**
+ * Jump to the event timeline, filtered down to the failed steps.
+ */
+function focusFailedSteps() {
+  activeFilter = 'failure';
+  filterBtns.forEach(b => b.classList.toggle('active', b.dataset.filter === activeFilter));
+  if (lastData) renderEventList();
+  const timeline = document.getElementById('timelineSection');
+  if (timeline && timeline.scrollIntoView) {
+    timeline.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+window.focusFailedSteps = focusFailedSteps;
+
+if (runFailure) {
+  runFailure.addEventListener('click', ev => {
+    const btn = ev.target.closest('button[data-action]');
+    if (!btn) return;
+    if (btn.dataset.action === 'show-causal') { focusCausalAnalysis(); return; }
+    if (btn.dataset.action === 'show-failures') { focusFailedSteps(); }
+  });
+}
+
+// ── Trace history (Phase 12) ──────────────────────────────────────────────
+/**
+ * The history panel browses `GET /api/traces`: a keyset-paginated list of
+ * trace summaries (no event payloads).  Clicking a row loads that trace —
+ * including its causal graph and root-cause diagnosis — into the results
+ * pane, so a demo can jump between runs.
+ */
+const HISTORY_PAGE_SIZE = 20;
+
+let historyItems   = [];
+let historyCursor  = null;
+let historyCount   = 0;
+let historyLoading = false;
+
+/**
+ * Build the query string of a `GET /api/traces` request.
+ *
+ * @param {object} filters        {status, startDate, endDate}
+ * @param {string|null} cursor     keyset cursor of the next page
+ * @param {number} limit           page size
+ * @returns {string}               the URL-encoded query string
+ */
+function buildTraceHistoryQuery(filters, cursor, limit) {
+  const params = new URLSearchParams();
+  const f = filters || {};
+  const status = f.status || 'all';
+  if (status && status !== 'all') params.set('status', status);
+  if (f.startDate) params.set('start_date', f.startDate);
+  if (f.endDate) params.set('end_date', f.endDate);
+  if (cursor) params.set('cursor', cursor);
+  params.set('limit', String(limit || HISTORY_PAGE_SIZE));
+  return params.toString();
+}
+window.buildTraceHistoryQuery = buildTraceHistoryQuery;
+
+/**
+ * Read the filter values out of the DOM.
+ * @returns {{status: string, startDate: string, endDate: string}}
+ */
+function readHistoryFilters() {
+  return {
+    status: (historyStatus && historyStatus.value) || 'all',
+    startDate: (historyFrom && historyFrom.value) || '',
+    endDate: (historyTo && historyTo.value) || '',
+  };
+}
+window.readHistoryFilters = readHistoryFilters;
+
+/**
+ * Format the start time of a trace for the history list.
+ * @param {string|null} iso
+ * @returns {string}
+ */
+function formatTraceTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString();
+}
+window.formatTraceTime = formatTraceTime;
+
+/**
+ * Render the history rows.
+ * @param {Array} items  trace summaries
+ * @returns {string}     the markup
+ */
+function renderHistoryItems(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return '<p class="history-empty">No traces match the current filters.</p>';
+  }
+  return items.map(t => {
+    const cls  = statusClass(t.status);
+    const when = formatTraceTime(t.start_time);
+    const count = t.event_count == null ? 0 : t.event_count;
+    return `<button type="button" class="history-item status-${cls}" ` +
+           `data-trace-id="${escHtml(t.trace_id || '')}" title="${escHtml(t.trace_id || '')}">` +
+           `<span class="history-row">` +
+           `<span class="history-dot status-${cls}"></span>` +
+           `<code class="history-id">${escHtml(shortId(t.trace_id))}</code>` +
+           `<span class="history-status">${escHtml(t.status || 'unknown')}</span>` +
+           `</span>` +
+           `<span class="history-row history-row-meta">` +
+           `<span class="history-agent">${escHtml(t.agent_id || 'unknown agent')}</span>` +
+           `<span class="history-time">${escHtml(when)}</span>` +
+           `<span class="history-events">${escHtml(String(count))} ev</span>` +
+           `<span class="history-latency">${escHtml(formatLatency(t.total_latency_ms))}</span>` +
+           `</span>` +
+           `</button>`;
+  }).join('');
+}
+window.renderHistoryItems = renderHistoryItems;
+
+/**
+ * Paint the history panel from the current state.
+ */
+function renderHistory() {
+  if (historyList) historyList.innerHTML = renderHistoryItems(historyItems);
+  if (historyMeta) {
+    historyMeta.textContent = historyCount
+      ? `${historyItems.length} of ${historyCount} trace${historyCount === 1 ? '' : 's'}`
+      : '';
+  }
+  if (historyMore) historyMore.classList.toggle('hidden', !historyCursor);
+}
+window.renderHistory = renderHistory;
+
+/**
+ * Paint an error in the history panel (the rest of the dashboard keeps
+ * working — the history is an extra, not a prerequisite).
+ */
+function renderHistoryError(err) {
+  const message = err && err.message ? err.message : String(err);
+  if (historyList) {
+    historyList.innerHTML = `<p class="history-empty history-error">Could not load traces: ${escHtml(message)}</p>`;
+  }
+  if (historyMeta) historyMeta.textContent = '';
+  if (historyMore) historyMore.classList.add('hidden');
+}
+window.renderHistoryError = renderHistoryError;
+
+/**
+ * Load a page of traces.
+ *
+ * @param {boolean} append  true → append the next page (keyset pagination)
+ */
+async function loadHistory(append) {
+  if (historyLoading) return;
+  historyLoading = true;
+  try {
+    const cursor = append ? historyCursor : null;
+    const query = buildTraceHistoryQuery(readHistoryFilters(), cursor, HISTORY_PAGE_SIZE);
+    const res = await fetch(`${API_BASE_URL}/api/traces?${query}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    const data = await res.json();
+    const items = Array.isArray(data.items) ? data.items : [];
+    historyItems  = append ? historyItems.concat(items) : items;
+    historyCursor = data.next_cursor || null;
+    historyCount  = typeof data.count === 'number' ? data.count : historyItems.length;
+    renderHistory();
+  } catch (err) {
+    renderHistoryError(err);
+  } finally {
+    historyLoading = false;
+  }
+}
+window.loadHistory = loadHistory;
+
+/**
+ * Load a stored trace into the results pane.
+ * @param {string} traceId
+ */
+async function openTrace(traceId) {
+  if (!traceId) return;
+  hideError();
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/traces/${encodeURIComponent(traceId)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    const trace = await res.json();
+    renderResults(trace);
+    if (resultsView && resultsView.scrollIntoView) {
+      resultsView.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  } catch (err) {
+    showError(`Could not load trace ${traceId}: ${err.message}`);
+  }
+}
+window.openTrace = openTrace;
+
+if (historyList) {
+  historyList.addEventListener('click', ev => {
+    const item = ev.target.closest('.history-item');
+    if (!item) return;
+    openTrace(item.dataset.traceId);
+  });
+}
+if (historyMore) {
+  historyMore.addEventListener('click', () => loadHistory(true));
+}
+if (historyRefresh) {
+  historyRefresh.addEventListener('click', () => loadHistory(false));
+}
+if (historyStatus) {
+  historyStatus.addEventListener('change', () => loadHistory(false));
+}
+if (historyFrom) {
+  historyFrom.addEventListener('change', () => loadHistory(false));
+}
+if (historyTo) {
+  historyTo.addEventListener('change', () => loadHistory(false));
+}
+
 // ── Mock data ─────────────────────────────────────────────────────────────
 const T0 = new Date('2026-10-08T12:00:00Z');
 const ts  = i => new Date(T0.getTime() + i * 1200).toISOString();
@@ -1124,10 +1445,11 @@ runBtn.addEventListener('click', async () => {
     }
 
     const data = await res.json();
-    if (statusClass(data.status) === 'failure') {
-      showError(`Agent trace completed with status: ${data.status}. See the failure events highlighted below.`);
-    }
+    // A failed run is *not* a request error: the API hands back the failed
+    // trace with its diagnosis, and the failure state explains it.
     renderResults(data);
+    // Keep the history in sync — the new run belongs at the top of the list.
+    loadHistory(false);
 
   } catch (err) {
     clearInterval(stepTimer);
@@ -1145,3 +1467,4 @@ dismissError.addEventListener('click', hideError);
 // ── Boot ──────────────────────────────────────────────────────────────────
 checkApiHealth();
 setInterval(checkApiHealth, 30_000);
+loadHistory(false);
