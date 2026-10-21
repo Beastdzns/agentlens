@@ -398,7 +398,7 @@ class _AgentRunner:
         # --- Initialise Gemini (if key is available) -----------------------
         gemini_client: Any = None
         api_key = os.getenv("GEMINI_API_KEY")
-        model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
         if api_key:
             try:
                 from google import genai
