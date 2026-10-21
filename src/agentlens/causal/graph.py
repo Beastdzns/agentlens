@@ -167,6 +167,9 @@ class CausalGraph:
     _parents: dict[str, list[str]] = field(
         default_factory=dict, repr=False, compare=False
     )
+    _depth_memo: dict[str, int] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         """Derive the adjacency maps used by the traversal helpers."""
@@ -242,32 +245,35 @@ class CausalGraph:
 
         Depth is the length of the longest parent chain to a root, so a node
         that hangs off a deep chain scores higher than a sibling that does
-        not.  Cycle-safe and iterative.
+        not.  Cycle-safe and iterative; results are memoised on the graph so
+        that repeated queries stay cheap (NFR1).
         """
         if event_id not in self.nodes:
             return 0
 
-        memo: dict[str, int] = {}
-        for start in self.nodes:
-            if start in memo:
+        memo = self._depth_memo
+        if event_id in memo:
+            return memo[event_id]
+
+        stack: list[str] = [event_id]
+        on_stack: set[str] = set()
+        while stack:
+            current = stack[-1]
+            if current in memo:
+                stack.pop()
+                on_stack.discard(current)
                 continue
-            # Walk up from ``start`` until a memoised node or a root is hit.
-            stack: list[str] = []
-            current = start
-            while current not in memo:
-                if current not in self.nodes:
-                    break
-                stack.append(current)
-                parents = self.parents(current)
-                if not parents:
-                    break
-                current = parents[0]
-            # ``memo[current]`` is the depth of the nearest known ancestor
-            # (0 for a root); each node on the stack is one level deeper.
-            base = memo.get(current, 0)
-            for nid in reversed(stack):
-                base = base + 1 if self.parents(nid) else 0
-                memo[nid] = base
+            parents = self._parents.get(current, ())
+            pending = [p for p in parents if p not in memo and p not in on_stack]
+            if pending:
+                on_stack.add(current)
+                stack.extend(pending)
+                continue
+            resolved = [memo[p] for p in parents if p in memo]
+            memo[current] = (max(resolved) + 1) if resolved else 0
+            stack.pop()
+            on_stack.discard(current)
+
         return memo.get(event_id, 0)
 
     def path(self, source_id: str, target_id: str) -> Optional[list[str]]:

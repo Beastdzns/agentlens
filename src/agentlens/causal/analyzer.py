@@ -189,6 +189,46 @@ def _looks_wrong(node: Optional[CausalNode]) -> bool:
     return bool(node.suspicious_output or node.error_message or node.exception_type)
 
 
+def _nodes_with_failed_ancestor(
+    graph: CausalGraph, failure_ids: set[str]
+) -> set[str]:
+    """
+    Return every node that has at least one failed ancestor.
+
+    Computed in a single pass over the structural edges instead of one
+    traversal per failure — the difference matters on large traces (NFR1).
+    """
+    reverse: dict[str, list[str]] = {}
+    for edge in _structural_edges(graph):
+        reverse.setdefault(edge.target, []).append(edge.source)
+
+    memo: dict[str, bool] = {}
+    for start in graph.nodes:
+        if start in memo:
+            continue
+        stack: list[str] = [start]
+        on_stack: set[str] = set()
+        while stack:
+            current = stack[-1]
+            if current in memo:
+                stack.pop()
+                on_stack.discard(current)
+                continue
+            parents = reverse.get(current, ())
+            pending = [p for p in parents if p not in memo and p not in on_stack]
+            if pending:
+                on_stack.add(current)
+                stack.extend(pending)
+                continue
+            memo[current] = any(
+                p in failure_ids or memo.get(p, False) for p in parents
+            )
+            stack.pop()
+            on_stack.discard(current)
+
+    return {node_id for node_id, flagged in memo.items() if flagged}
+
+
 # ---------------------------------------------------------------------------
 # The analyzer
 # ---------------------------------------------------------------------------
@@ -341,13 +381,14 @@ class RootCauseAnalyzer:
         self, graph: CausalGraph, failure_ids: set[str]
     ) -> tuple[list[CausalNode], list[str]]:
         """Split failures into primary (no failed ancestor) and secondary."""
+        with_failed_ancestor = _nodes_with_failed_ancestor(graph, failure_ids)
         primary: list[CausalNode] = []
         secondary: list[str] = []
         for failure_id in sorted(failure_ids):
             node = graph.node(failure_id)
             if node is None:
                 continue
-            if graph.ancestors(failure_id) & failure_ids:
+            if failure_id in with_failed_ancestor:
                 secondary.append(failure_id)
             else:
                 primary.append(node)
