@@ -170,6 +170,13 @@ const metaEventCount = document.getElementById('metaEventCount');
 
 const causalSection  = document.getElementById('causalSection');
 const causalPanel    = document.getElementById('causalPanel');
+const causalFullscreenBtn = document.getElementById('causalFullscreenBtn');
+
+const cfsOverlay     = document.getElementById('cfsOverlay');
+const cfsClose       = document.getElementById('cfsClose');
+const cfsContent     = document.getElementById('cfsContent');
+
+let cfsActive = false;
 
 const runFailure     = document.getElementById('runFailure');
 
@@ -206,6 +213,159 @@ function shortId(id) {
 function badgeHTML(status) {
   const cls = statusClass(status);
   return `<span class="badge badge-${cls}">${escHtml(status || 'unknown')}</span>`;
+}
+
+/**
+ * Minimal markdown-to-HTML renderer (no dependencies).
+ *
+ * Handles: fenced code blocks, headers (h1-h6), blockquotes, horizontal
+ * rules, ordered / unordered lists, links, inline code, bold, italic and
+ * paragraphs.  All user text is HTML-escaped so the output is safe to inject
+ * with innerHTML.
+ *
+ * @param {string|null|undefined} text
+ * @returns {string} HTML markup
+ */
+function renderMarkdown(text) {
+  if (text == null || String(text).trim() === '') {
+    return '<p class="md-empty">(no response)</p>';
+  }
+
+  let s = String(text);
+
+  // --- Protect fenced code blocks -------------------------------------------
+  const codeBlocks = [];
+  s = s.replace(/```([\s\S]*?)```/g, (_m, code) => {
+    codeBlocks.push(escHtml(code.trim()));
+    return `\x00CB${codeBlocks.length - 1}\x00`;
+  });
+
+  // --- Structural pass -------------------------------------------------------
+  const lines = s.split('\n');
+  const out = [];
+  let inList = false;
+  let listType = null;
+
+  const flushList = () => {
+    if (inList) {
+      out.push(listType === 'ul' ? '</ul>' : '</ol>');
+      inList = false;
+      listType = null;
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Horizontal rule
+    if (/^[-*_]{3,}$/.test(trimmed)) {
+      flushList();
+      out.push('<hr class="md-hr">');
+      continue;
+    }
+
+    // Blockquote
+    if (trimmed.startsWith('> ')) {
+      flushList();
+      out.push(`<blockquote class="md-quote">${renderInline(trimmed.slice(2))}</blockquote>`);
+      continue;
+    }
+
+    // Blank line
+    if (trimmed === '') {
+      flushList();
+      out.push('');
+      continue;
+    }
+
+    // Header h1-h6
+    const h = trimmed.match(/^(#{1,6})\s(.*)/);
+    if (h) {
+      flushList();
+      out.push(`<h${h[1].length} class="md-h${h[1].length}">${renderInline(h[2])}</h${h[1].length}>`);
+      continue;
+    }
+
+    // Unordered list
+    const ul = trimmed.match(/^([*+-])\s(.*)/);
+    if (ul) {
+      if (!inList || listType !== 'ul') {
+        flushList();
+        out.push('<ul class="md-ul">');
+        inList = true;
+        listType = 'ul';
+      }
+      out.push(`<li class="md-li">${renderInline(ul[2])}</li>`);
+      continue;
+    }
+
+    // Ordered list
+    const ol = trimmed.match(/^(\d+)\.\s(.*)/);
+    if (ol) {
+      if (!inList || listType !== 'ol') {
+        flushList();
+        out.push('<ol class="md-ol">');
+        inList = true;
+        listType = 'ol';
+      }
+      out.push(`<li class="md-li">${renderInline(ol[2])}</li>`);
+      continue;
+    }
+
+    // Paragraph
+    flushList();
+    out.push(`<p class="md-p">${renderInline(trimmed)}</p>`);
+  }
+  flushList();
+
+  // --- Restore protected code blocks -----------------------------------------
+  return out.join('\n').replace(/\x00CB(\d+)\x00/g, (_m, i) => {
+    return `<pre class="md-code"><code>${codeBlocks[+i]}</code></pre>`;
+  });
+}
+
+/**
+ * Inline markdown: links, code, bold, italic.  Uses placeholder tokens so
+ * that generated HTML tags are not re-escaped by escHtml.
+ * @param {string} text  raw (unescaped) inline text
+ * @returns {string} HTML with safe text and protected tags
+ */
+function renderInline(text) {
+  const protectedSpans = [];
+  const protect = (html) => {
+    protectedSpans.push(html);
+    return `\x01PROT${protectedSpans.length - 1}\x01`;
+  };
+
+  // Links: [label](url)
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, url) => {
+    return protect(`<a href="${escHtml(url)}" target="_blank" rel="noopener">${escHtml(label)}</a>`);
+  });
+
+  // Inline code: `code`
+  text = text.replace(/`([^`]+)`/g, (_m, inner) => {
+    return protect(`<code class="md-code-inline">${escHtml(inner)}</code>`);
+  });
+
+  // Bold: **text** / __text__
+  text = text.replace(/\*\*(.+?)\*\*/g, (_m, inner) => {
+    return protect(`<strong>${escHtml(inner)}</strong>`);
+  });
+  text = text.replace(/__(.+?)__/g, (_m, inner) => {
+    return protect(`<strong>${escHtml(inner)}</strong>`);
+  });
+
+  // Italic: *text* / _text_
+  text = text.replace(/\*(.+?)\*/g, (_m, inner) => {
+    return protect(`<em>${escHtml(inner)}</em>`);
+  });
+  text = text.replace(/_(.+?)_/g, (_m, inner) => {
+    return protect(`<em>${escHtml(inner)}</em>`);
+  });
+
+  // Escape everything that remains, then restore protected tags.
+  text = escHtml(text);
+  return text.replace(/\x01PROT(\d+)\x01/g, (_m, i) => protectedSpans[+i]);
 }
 
 function isLlmEvent(ev) {
@@ -294,7 +454,7 @@ function renderResults(data) {
   const resp = data.response
     || (sortedEvents.length ? extractResponse(sortedEvents.slice().reverse().find(e => e.event_type === 'final_response')?.output_data) : null)
     || '';
-  responseText.textContent = resp || '(no response)';
+  responseText.innerHTML = renderMarkdown(resp || '(no response)');
 
   // Sidebar meta
   metaTraceId.textContent    = shortId(data.trace_id);
@@ -1320,6 +1480,54 @@ function focusCausalAnalysis() {
   window.setTimeout(() => causalSection.classList.remove('causal-flash'), 1800);
 }
 window.focusCausalAnalysis = focusCausalAnalysis;
+
+/**
+ * Toggle full-screen mode for the causal graph.
+ *
+ * Copies the rendered graph into an overlay that fills the viewport so the
+ * graph can be inspected at a comfortable size.  Press Escape or click the
+ * close button to exit.
+ */
+function toggleCausalFullscreen() {
+  if (!causalPanel || !cfsOverlay || !cfsContent) return;
+
+  if (!cfsActive) {
+    // Enter fullscreen
+    cfsContent.innerHTML = causalPanel.innerHTML;
+    cfsOverlay.classList.remove('hidden');
+    cfsActive = true;
+    document.body.style.overflow = 'hidden';
+    // Make the graph SVG fill the available width inside the overlay.
+    const svg = cfsContent.querySelector('.causal-svg');
+    if (svg) {
+      svg.style.width = '100%';
+      svg.style.maxWidth = 'none';
+    }
+  } else {
+    // Exit fullscreen
+    cfsOverlay.classList.add('hidden');
+    cfsContent.innerHTML = '';
+    cfsActive = false;
+    document.body.style.overflow = '';
+  }
+}
+window.toggleCausalFullscreen = toggleCausalFullscreen;
+
+if (cfsClose) {
+  cfsClose.addEventListener('click', toggleCausalFullscreen);
+}
+if (causalFullscreenBtn) {
+  causalFullscreenBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    toggleCausalFullscreen();
+  });
+}
+
+// Close on Escape key
+window.addEventListener('keydown', (ev) => {
+  if (cfsActive && ev.key === 'Escape') toggleCausalFullscreen();
+});
+
 
 /**
  * Jump to the event timeline, filtered down to the failed steps.

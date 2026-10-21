@@ -954,6 +954,114 @@ function testCausalFocusInTimeline() {
   activeFilter = 'all';
 }
 
+/* ── Markdown rendering (Phase 12) ───────────────────────────── */
+
+function testRenderMarkdownBasics() {
+  assertEqual(renderMarkdown(null), '<p class="md-empty">(no response)</p>', 'markdown: null -> empty paragraph');
+  assertEqual(renderMarkdown(''), '<p class="md-empty">(no response)</p>', 'markdown: empty string -> empty paragraph');
+  assertEqual(renderMarkdown('   '), '<p class="md-empty">(no response)</p>', 'markdown: whitespace only -> empty paragraph');
+
+  assert(renderMarkdown('plain text').includes('<p class="md-p">plain text</p>'), 'markdown: plain text becomes a paragraph');
+  assert(renderMarkdown('plain text').includes('plain text'), 'markdown: text content preserved');
+}
+
+function testRenderMarkdownEscapesHtml() {
+  const html = renderMarkdown('<script>alert(1)</script>');
+  assert(!html.includes('<script>'), 'markdown: HTML is escaped');
+  assert(html.includes('&lt;script&gt;'), 'markdown: escaped script tag is rendered as text');
+}
+
+function testRenderMarkdownHeaders() {
+  assert(renderMarkdown('# Title').includes('<h1 class="md-h1">Title</h1>'), 'markdown: h1 header');
+  assert(renderMarkdown('## Sub').includes('<h2 class="md-h2">Sub</h2>'), 'markdown: h2 header');
+  assert(renderMarkdown('###### Tiny').includes('<h6 class="md-h6">Tiny</h6>'), 'markdown: h6 header');
+  assert(!renderMarkdown('###NoSpace').includes('<h3'), 'markdown: header requires space after #');
+}
+
+function testRenderMarkdownBoldItalic() {
+  assert(renderMarkdown('**bold**').includes('<strong>bold</strong>'), 'markdown: bold with **');
+  assert(renderMarkdown('__bold__').includes('<strong>bold</strong>'), 'markdown: bold with __');
+  assert(renderMarkdown('*italic*').includes('<em>italic</em>'), 'markdown: italic with *');
+  assert(renderMarkdown('_italic_').includes('<em>italic</em>'), 'markdown: italic with _');
+}
+
+function testRenderMarkdownInlineCode() {
+  const html = renderMarkdown('use `console.log()`');
+  assert(html.includes('<code class="md-code-inline">console.log()</code>'), 'markdown: inline code');
+}
+
+function testRenderMarkdownLinks() {
+  const html = renderMarkdown('[Google](https://google.com)');
+  assert(html.includes('<a href="https://google.com"'), 'markdown: link href');
+  assert(html.includes('target="_blank"'), 'markdown: link target blank');
+  assert(html.includes('rel="noopener"'), 'markdown: link rel noopener');
+  assert(html.includes('>Google<'), 'markdown: link label');
+}
+
+function testRenderMarkdownCodeBlock() {
+  const html = renderMarkdown('```\nconst x = 1;\n```');
+  assert(html.includes('<pre class="md-code"><code>const x = 1;</code></pre>'), 'markdown: fenced code block');
+  assert(html.includes('&lt;') === false || html.includes('const x = 1;'), 'markdown: code block content preserved');
+}
+
+function testRenderMarkdownLists() {
+  const ul = renderMarkdown('- a\n- b');
+  assert(ul.includes('<ul class="md-ul">'), 'markdown: unordered list');
+  assert(ul.includes('<li class="md-li">a</li>'), 'markdown: list item a');
+  assert(ul.includes('<li class="md-li">b</li>'), 'markdown: list item b');
+
+  const ol = renderMarkdown('1. first\n2. second');
+  assert(ol.includes('<ol class="md-ol">'), 'markdown: ordered list');
+  assert(ol.includes('<li class="md-li">first</li>'), 'markdown: ordered list item first');
+}
+
+function testRenderMarkdownBlockquoteAndHr() {
+  const bq = renderMarkdown('> quoted text');
+  assert(bq.includes('<blockquote class="md-quote">'), 'markdown: blockquote');
+  assert(bq.includes('quoted text'), 'markdown: blockquote content');
+
+  const hr = renderMarkdown('***');
+  assert(hr.includes('<hr class="md-hr">'), 'markdown: horizontal rule');
+}
+
+function testRenderMarkdownParagraphs() {
+  const html = renderMarkdown('first paragraph\n\nsecond paragraph');
+  assert(html.includes('<p class="md-p">first paragraph</p>'), 'markdown: first paragraph');
+  assert(html.includes('<p class="md-p">second paragraph</p>'), 'markdown: second paragraph');
+}
+
+/* ── Fullscreen causal graph (Phase 12) ──────────────────────── */
+
+function testToggleCausalFullscreen() {
+  const panel = document.getElementById('causalPanel');
+  panel.innerHTML = '<svg class="causal-svg" viewBox="0 0 400 200"><rect width="400" height="200"/></svg>';
+
+  // Enter fullscreen
+  toggleCausalFullscreen();
+  const overlay = document.getElementById('cfsOverlay');
+  const content = document.getElementById('cfsContent');
+  assert(!overlay.classList.contains('hidden'), 'fullscreen: overlay is visible when opened');
+  assert(content.innerHTML.includes('causal-svg'), 'fullscreen: graph content copied to overlay');
+  assert(document.body.style.overflow === 'hidden', 'fullscreen: body scroll is disabled');
+
+  // Exit via close button
+  document.getElementById('cfsClose').click();
+  assert(overlay.classList.contains('hidden'), 'fullscreen: overlay is hidden after close');
+  assert(content.innerHTML === '', 'fullscreen: content is cleared after close');
+  assert(document.body.style.overflow !== 'hidden', 'fullscreen: body scroll is restored');
+
+  // Enter then press Escape
+  toggleCausalFullscreen();
+  assert(!document.getElementById('cfsOverlay').classList.contains('hidden'), 'fullscreen: overlay visible again');
+  const escEvent = new KeyboardEvent('keydown', { key: 'Escape' });
+  window.dispatchEvent(escEvent);
+  assert(document.getElementById('cfsOverlay').classList.contains('hidden'), 'fullscreen: Escape key closes overlay');
+
+  // Cleanup overflow state
+  document.body.style.overflow = '';
+  panel.innerHTML = '';
+}
+
 /* ── Run all tests ───────────────────────────────────────────── */
 
 async function runAllTests() {
@@ -997,6 +1105,17 @@ async function runAllTests() {
   testRenderCausalNodeDetails();
   testCausalSelectHighlightsPath();
   testCausalFocusInTimeline();
+  testRenderMarkdownBasics();
+  testRenderMarkdownEscapesHtml();
+  testRenderMarkdownHeaders();
+  testRenderMarkdownBoldItalic();
+  testRenderMarkdownInlineCode();
+  testRenderMarkdownLinks();
+  testRenderMarkdownCodeBlock();
+  testRenderMarkdownLists();
+  testRenderMarkdownBlockquoteAndHr();
+  testRenderMarkdownParagraphs();
+  testToggleCausalFullscreen();
   testBuildTraceHistoryQuery();
   testReadHistoryFilters();
   testFormatTraceTime();
