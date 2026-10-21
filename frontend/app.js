@@ -132,6 +132,8 @@ let isMockMode   = false;
 let activeFilter = 'all';
 let lastData     = null;   // full API response
 let sortedEvents = [];     // chronologically sorted events from lastData
+let lastCausalGraph = null;   // graph payload of the last rendered panel
+let causalSelectedId = null;  // event id currently selected in the graph
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const queryInput    = document.getElementById('queryInput');
@@ -610,9 +612,9 @@ function buildJsonBlock(ev) {
   return html;
 }
 
-window.toggleEvent = function(idx) {
+window.toggleEvent = function(idx, forceOpen) {
   const card = document.getElementById(`ev-card-${idx}`);
-  if (card) card.classList.toggle('open');
+  if (card) card.classList.toggle('open', forceOpen === undefined ? !card.classList.contains('open') : forceOpen);
 };
 
 // ── Filter bar ────────────────────────────────────────────────────────────
@@ -933,6 +935,8 @@ function renderCausalPanel(data) {
   const rootCause = data && data.root_cause;
   if (!graph || !Array.isArray(graph.nodes) || !graph.nodes.length) return '';
 
+  lastCausalGraph = graph;
+
   const layout = layoutCausalGraph(graph);
   const parts = [];
   parts.push('<div class="causal-inner">');
@@ -942,6 +946,8 @@ function renderCausalPanel(data) {
     renderCausalGraph(graph, rootCause) +
     '</div></div>'
   );
+  parts.push('<div id="causalTooltip" class="causal-tooltip hidden"></div>');
+  parts.push('<div id="causalNodeDetails" class="causal-node-details hidden"></div>');
   parts.push(
     '<div class="causal-legend">' +
     '<span class="cg-legend-item"><i class="cg-legend-dot cg-legend-failure"></i>failed step</span>' +
@@ -973,12 +979,254 @@ function renderCausalSection(data) {
   if (!markup) {
     causalSection.classList.add('hidden');
     causalPanel.innerHTML = '';
+    lastCausalGraph = null;
+    causalSelectedId = null;
     return;
   }
   causalPanel.innerHTML = markup;
+  lastCausalGraph = data && data.causal_graph;
+  if (causalSelectedId && lastCausalGraph.nodes.some(n => String(n.event_id) === causalSelectedId)) {
+    selectCausal(causalSelectedId);
+  }
   causalSection.classList.remove('hidden');
 }
 window.renderCausalSection = renderCausalSection;
+
+// ── Causal graph interactivity (Phase 12) ─────────────────────
+/**
+ * Ancestors (upstream parents) of an event, cycle-safe.
+ * @param {Array} edges  {source, target} pairs
+ * @param {string} id
+ * @returns {Set<string>}
+ */
+function causalAncestors(edges, id) {
+  const parents = new Map();
+  for (const e of edges || []) {
+    const list = parents.get(e.target) || [];
+    list.push(e.source);
+    parents.set(e.target, list);
+  }
+  const out = new Set();
+  const stack = [id];
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const p of parents.get(cur) || []) {
+      if (p !== id && !out.has(p)) { out.add(p); stack.push(p); }
+    }
+  }
+  return out;
+}
+window.causalAncestors = causalAncestors;
+
+/**
+ * Descendants (downstream children) of an event, cycle-safe.
+ * @param {Array} edges  {source, target} pairs
+ * @param {string} id
+ * @returns {Set<string>}
+ */
+function causalDescendants(edges, id) {
+  const children = new Map();
+  for (const e of edges || []) {
+    const list = children.get(e.source) || [];
+    list.push(e.target);
+    children.set(e.source, list);
+  }
+  const out = new Set();
+  const stack = [id];
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const c of children.get(cur) || []) {
+      if (c !== id && !out.has(c)) { out.add(c); stack.push(c); }
+    }
+  }
+  return out;
+}
+window.causalDescendants = causalDescendants;
+
+/**
+ * Highlight the direct neighbours of a node on hover.
+ * @param {string} id  event id hovered
+ */
+function highlightCausal(id) {
+  if (!lastCausalGraph || !causalPanel) return;
+  const edges = lastCausalGraph.edges || [];
+  const related = new Set([id]);
+  for (const e of edges) {
+    if (e.source === id) related.add(e.target);
+    if (e.target === id) related.add(e.source);
+  }
+  causalPanel.querySelectorAll('.cg-node').forEach(n => {
+    n.classList.toggle('cg-dim', !related.has(n.dataset.eventId));
+  });
+  causalPanel.querySelectorAll('.cg-edge').forEach(e => {
+    e.classList.toggle('cg-dim', !(related.has(e.dataset.source) && related.has(e.dataset.target)));
+  });
+}
+window.highlightCausal = highlightCausal;
+
+/**
+ * Pure tooltip markup for a node.
+ * @param {object} node  causal graph node
+ * @returns {string}
+ */
+function causalTooltipHtml(node) {
+  const lines = [
+    `<div class="tt-label">${escHtml(String(node.label || node.event_type || node.event_id))}</div>`,
+    `<span class="tt-type">${escHtml(node.event_type)}</span>`,
+    `<div class="tt-meta">` +
+    `<span class="tt-key">Status</span>${badgeHTML(node.status)}` +
+    `<span class="tt-key">Latency</span>${formatLatency(node.latency_ms)}` +
+    '</div>',
+  ];
+  if (node.error_message) {
+    lines.push(`<div class="tt-error">${escHtml(node.error_message)}</div>`);
+  }
+  return lines.join('');
+}
+window.causalTooltipHtml = causalTooltipHtml;
+
+/**
+ * Select a node: highlight its full upstream/downstream path, dim the rest,
+ * and render the node details card.
+ * @param {string|null} id  event id, or null to deselect
+ */
+function selectCausal(id) {
+  causalSelectedId = id;
+  if (!lastCausalGraph || !causalPanel) return;
+
+  const edges = lastCausalGraph.edges || [];
+  const path = new Set(id != null ? [id] : []);
+  if (id != null) {
+    for (const a of causalAncestors(edges, id)) path.add(a);
+    for (const d of causalDescendants(edges, id)) path.add(d);
+  }
+
+  causalPanel.querySelectorAll('.cg-node').forEach(n => {
+    const isSelected = id != null && n.dataset.eventId === id;
+    n.classList.toggle('cg-selected', isSelected);
+    n.classList.toggle('cg-dim', id != null && !path.has(n.dataset.eventId));
+  });
+  causalPanel.querySelectorAll('.cg-edge').forEach(e => {
+    e.classList.toggle('cg-dim', id != null && !(path.has(e.dataset.source) && path.has(e.dataset.target)));
+  });
+
+  const details = document.getElementById('causalNodeDetails');
+  if (!nodeOf(id)) {
+    if (details) details.classList.add('hidden');
+    return;
+  }
+  if (details) {
+    details.innerHTML = renderCausalNodeDetails(nodeOf(id), lastCausalGraph);
+    details.classList.remove('hidden');
+  }
+}
+window.selectCausal = selectCausal;
+
+function nodeOf(id) {
+  return lastCausalGraph && lastCausalGraph.nodes.find(n => String(n.event_id) === id);
+}
+
+/**
+ * Render the details card of a graph node.
+ * @param {object|null} node
+ * @param {object} graph
+ * @returns {string}
+ */
+function renderCausalNodeDetails(node, graph) {
+  if (!node) return '<div class="causal-node-details hidden"></div>';
+  const err = node.error_message
+    ? String(node.error_message)
+    : (node.exception_type ? `${node.exception_type}${node.exception_message ? ': ' + node.exception_message : ''}` : '');
+  const chip = statusClass(node.status);
+  return `
+<div class="causal-node-details">
+  <div class="cnd-header">
+    <span class="cnd-title">${escHtml(String(node.label || node.event_type || node.event_id))}</span>
+    <span class="cnd-chip ${chip}">${escHtml(chip)}</span>
+  </div>
+  <div class="cnd-body">
+    <div class="cnd-row"><span class="cnd-key">Type</span><span class="cnd-val mono">${escHtml(node.event_type)}</span></div>
+    <div class="cnd-row"><span class="cnd-key">Status</span><span class="cnd-val">${badgeHTML(node.status)}</span></div>
+    <div class="cnd-row"><span class="cnd-key">Latency</span><span class="cnd-val">${formatLatency(node.latency_ms)}</span></div>
+    <div class="cnd-row"><span class="cnd-key">Time</span><span class="cnd-val">${node.timestamp ? new Date(node.timestamp).toLocaleTimeString() : '—'}</span></div>
+    <div class="cnd-row"><span class="cnd-key">Importance</span><span class="cnd-val">${typeof node.importance_score === 'number' ? node.importance_score.toFixed(2) : '—'}</span></div>
+    ${err ? `<div class="cnd-row"><span class="cnd-key">Error</span><span class="cnd-val mono">${escHtml(err)}</span></div>` : ''}
+  </div>
+  <div class="cnd-actions">
+    <button type="button" class="cnd-btn" data-action="show-in-timeline">Show in timeline →</button>
+  </div>
+</div>`;
+}
+window.renderCausalNodeDetails = renderCausalNodeDetails;
+
+/**
+ * Show the tooltip for a hovered node, following the pointer.
+ */
+function showCausalTooltip(ev, id) {
+  const tooltip = document.getElementById('causalTooltip');
+  if (!tooltip || !lastCausalGraph) return;
+  const node = nodeOf(id);
+  if (!node) return;
+  tooltip.innerHTML = causalTooltipHtml(node);
+  const rect = causalPanel.getBoundingClientRect();
+  let x = Math.min(Math.max(ev.clientX - rect.left + 14, 8), rect.width - 10);
+  let y = Math.min(Math.max(ev.clientY - rect.top + 14, 8), rect.height - 10);
+  tooltip.style.left = x + 'px';
+  tooltip.style.top = y + 'px';
+  tooltip.classList.remove('hidden');
+}
+window.showCausalTooltip = showCausalTooltip;
+
+function clearCausalHighlight() {
+  if (!causalPanel) return;
+  causalPanel.querySelectorAll('.cg-node').forEach(n => n.classList.remove('cg-dim'));
+  causalPanel.querySelectorAll('.cg-edge').forEach(e => e.classList.remove('cg-dim'));
+  const tooltip = document.getElementById('causalTooltip');
+  if (tooltip) tooltip.classList.add('hidden');
+}
+window.clearCausalHighlight = clearCausalHighlight;
+
+/**
+ * Open the matching event card in the timeline for the selected node.
+ */
+function focusEventInTimeline(eventId) {
+  if (!lastData || !eventId) return;
+  const idx = sortedEvents.findIndex(e => e.event_id === eventId);
+  if (idx < 0) return;
+  toggleEvent(idx, true);
+  const card = document.getElementById(`ev-card-${idx}`);
+  if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  activeFilter = 'all';
+  filterBtns.forEach(b => b.classList.toggle('active', b.dataset.filter === 'all'));
+  if (lastData) renderEventList();
+}
+window.focusEventInTimeline = focusEventInTimeline;
+
+if (causalPanel) {
+  causalPanel.addEventListener('mouseover', ev => {
+    if (causalSelectedId != null) return;
+    const node = ev.target.closest('.cg-node[data-event-id]');
+    if (!node) return;
+    highlightCausal(node.dataset.eventId);
+    showCausalTooltip(ev, node.dataset.eventId);
+  });
+  causalPanel.addEventListener('mouseout', ev => {
+    if (ev.target.closest('.cg-node[data-event-id], [data-action="show-in-timeline"]')) return;
+    clearCausalHighlight();
+  });
+  causalPanel.addEventListener('mousemove', ev => {
+    if (causalSelectedId != null) return;
+    const node = ev.target.closest('.cg-node[data-event-id]');
+    if (!node) return;
+    showCausalTooltip(ev, node.dataset.eventId);
+  });
+  causalPanel.addEventListener('click', ev => {
+    const node = ev.target.closest('.cg-node[data-event-id]');
+    if (node) { selectCausal(node.dataset.eventId); return; }
+    if (ev.target.closest('[data-action="show-in-timeline"]')) { focusEventInTimeline(causalSelectedId); return; }
+    if (ev.target.closest('.causal-canvas')) selectCausal(null);
+  });
+}
 
 // ── Live-run failure state (Phase 12) ─────────────────────────────────────
 /**
