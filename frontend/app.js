@@ -1141,6 +1141,7 @@ function renderCausalSection(data) {
     causalPanel.innerHTML = '';
     lastCausalGraph = null;
     causalSelectedId = null;
+    exitCausalFullscreen();
     return;
   }
   causalPanel.innerHTML = markup;
@@ -1151,6 +1152,18 @@ function renderCausalSection(data) {
   causalSection.classList.remove('hidden');
 }
 window.renderCausalSection = renderCausalSection;
+
+/**
+ * Exit fullscreen mode for the causal graph (called when a new trace loads).
+ */
+function exitCausalFullscreen() {
+  if (!cfsActive) return;
+  if (cfsOverlay) cfsOverlay.classList.add('hidden');
+  if (cfsContent) cfsContent.innerHTML = '';
+  cfsActive = false;
+  if (document.body) document.body.style.overflow = '';
+}
+window.exitCausalFullscreen = exitCausalFullscreen;
 
 // ── Causal graph interactivity (Phase 12) ─────────────────────
 /**
@@ -1204,21 +1217,68 @@ function causalDescendants(edges, id) {
 window.causalDescendants = causalDescendants;
 
 /**
+ * Return the container that currently holds the rendered causal graph:
+ * the overlay content when fullscreen is active, otherwise the sidebar panel.
+ * @returns {HTMLElement|null}
+ */
+function getCausalContainer() {
+  if (cfsActive && cfsContent) return cfsContent;
+  return causalPanel || null;
+}
+
+/**
+ * Attach causal-graph interactivity (hover, click, tooltip) to a container.
+ * Uses event delegation so it works on dynamically copied markup too.
+ * @param {HTMLElement} container
+ */
+function attachCausalInteractivity(container) {
+  if (!container) return;
+  container.addEventListener('mouseover', ev => {
+    if (causalSelectedId != null) return;
+    const node = ev.target.closest('.cg-node[data-event-id]');
+    if (!node) return;
+    highlightCausal(node.dataset.eventId);
+    showCausalTooltip(ev, node.dataset.eventId);
+  });
+  container.addEventListener('mouseout', ev => {
+    if (ev.target.closest('.cg-node[data-event-id], [data-action="show-in-timeline"]')) return;
+    clearCausalHighlight();
+  });
+  container.addEventListener('mousemove', ev => {
+    if (causalSelectedId != null) return;
+    const node = ev.target.closest('.cg-node[data-event-id]');
+    if (!node) return;
+    showCausalTooltip(ev, node.dataset.eventId);
+  });
+  container.addEventListener('click', ev => {
+    const node = ev.target.closest('.cg-node[data-event-id]');
+    if (node) { selectCausal(node.dataset.eventId); return; }
+    if (ev.target.closest('[data-action="show-in-timeline"]')) { focusEventInTimeline(causalSelectedId); return; }
+    if (ev.target.closest('.causal-canvas, .cfs-content')) selectCausal(null);
+  });
+}
+
+if (causalPanel) attachCausalInteractivity(causalPanel);
+if (cfsContent) attachCausalInteractivity(cfsContent);
+
+/**
  * Highlight the direct neighbours of a node on hover.
  * @param {string} id  event id hovered
  */
 function highlightCausal(id) {
-  if (!lastCausalGraph || !causalPanel) return;
+  if (!lastCausalGraph) return;
+  const container = getCausalContainer();
+  if (!container) return;
   const edges = lastCausalGraph.edges || [];
   const related = new Set([id]);
   for (const e of edges) {
     if (e.source === id) related.add(e.target);
     if (e.target === id) related.add(e.source);
   }
-  causalPanel.querySelectorAll('.cg-node').forEach(n => {
+  container.querySelectorAll('.cg-node').forEach(n => {
     n.classList.toggle('cg-dim', !related.has(n.dataset.eventId));
   });
-  causalPanel.querySelectorAll('.cg-edge').forEach(e => {
+  container.querySelectorAll('.cg-edge').forEach(e => {
     e.classList.toggle('cg-dim', !(related.has(e.dataset.source) && related.has(e.dataset.target)));
   });
 }
@@ -1252,7 +1312,10 @@ window.causalTooltipHtml = causalTooltipHtml;
  */
 function selectCausal(id) {
   causalSelectedId = id;
-  if (!lastCausalGraph || !causalPanel) return;
+  if (!lastCausalGraph) return;
+
+  const container = getCausalContainer();
+  if (!container) return;
 
   const edges = lastCausalGraph.edges || [];
   const path = new Set(id != null ? [id] : []);
@@ -1261,12 +1324,12 @@ function selectCausal(id) {
     for (const d of causalDescendants(edges, id)) path.add(d);
   }
 
-  causalPanel.querySelectorAll('.cg-node').forEach(n => {
+  container.querySelectorAll('.cg-node').forEach(n => {
     const isSelected = id != null && n.dataset.eventId === id;
     n.classList.toggle('cg-selected', isSelected);
     n.classList.toggle('cg-dim', id != null && !path.has(n.dataset.eventId));
   });
-  causalPanel.querySelectorAll('.cg-edge').forEach(e => {
+  container.querySelectorAll('.cg-edge').forEach(e => {
     e.classList.toggle('cg-dim', id != null && !(path.has(e.dataset.source) && path.has(e.dataset.target)));
   });
 
@@ -1328,9 +1391,10 @@ function showCausalTooltip(ev, id) {
   const node = nodeOf(id);
   if (!node) return;
   tooltip.innerHTML = causalTooltipHtml(node);
-  const rect = causalPanel.getBoundingClientRect();
-  let x = Math.min(Math.max(ev.clientX - rect.left + 14, 8), rect.width - 10);
-  let y = Math.min(Math.max(ev.clientY - rect.top + 14, 8), rect.height - 10);
+  const container = getCausalContainer();
+  const rect = container ? container.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+  let x = Math.min(Math.max(ev.clientX - rect.left + 14, 8), Math.max(rect.width - 10, 0));
+  let y = Math.min(Math.max(ev.clientY - rect.top + 14, 8), Math.max(rect.height - 10, 0));
   tooltip.style.left = x + 'px';
   tooltip.style.top = y + 'px';
   tooltip.classList.remove('hidden');
@@ -1338,9 +1402,10 @@ function showCausalTooltip(ev, id) {
 window.showCausalTooltip = showCausalTooltip;
 
 function clearCausalHighlight() {
-  if (!causalPanel) return;
-  causalPanel.querySelectorAll('.cg-node').forEach(n => n.classList.remove('cg-dim'));
-  causalPanel.querySelectorAll('.cg-edge').forEach(e => e.classList.remove('cg-dim'));
+  const container = getCausalContainer();
+  if (!container) return;
+  container.querySelectorAll('.cg-node').forEach(n => n.classList.remove('cg-dim'));
+  container.querySelectorAll('.cg-edge').forEach(e => e.classList.remove('cg-dim'));
   const tooltip = document.getElementById('causalTooltip');
   if (tooltip) tooltip.classList.add('hidden');
 }
@@ -1362,33 +1427,8 @@ function focusEventInTimeline(eventId) {
 }
 window.focusEventInTimeline = focusEventInTimeline;
 
-if (causalPanel) {
-  causalPanel.addEventListener('mouseover', ev => {
-    if (causalSelectedId != null) return;
-    const node = ev.target.closest('.cg-node[data-event-id]');
-    if (!node) return;
-    highlightCausal(node.dataset.eventId);
-    showCausalTooltip(ev, node.dataset.eventId);
-  });
-  causalPanel.addEventListener('mouseout', ev => {
-    if (ev.target.closest('.cg-node[data-event-id], [data-action="show-in-timeline"]')) return;
-    clearCausalHighlight();
-  });
-  causalPanel.addEventListener('mousemove', ev => {
-    if (causalSelectedId != null) return;
-    const node = ev.target.closest('.cg-node[data-event-id]');
-    if (!node) return;
-    showCausalTooltip(ev, node.dataset.eventId);
-  });
-  causalPanel.addEventListener('click', ev => {
-    const node = ev.target.closest('.cg-node[data-event-id]');
-    if (node) { selectCausal(node.dataset.eventId); return; }
-    if (ev.target.closest('[data-action="show-in-timeline"]')) { focusEventInTimeline(causalSelectedId); return; }
-    if (ev.target.closest('.causal-canvas')) selectCausal(null);
-  });
-}
-
 // ── Live-run failure state (Phase 12) ─────────────────────────────────────
+
 /**
  * Build the failure state of a run.
  *
