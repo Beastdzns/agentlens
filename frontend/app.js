@@ -1,4 +1,4 @@
-﻿/**
+/**
  * AgentLens – app.js  (feature/timeline_intf)
  *
  * Change API_BASE_URL to point at a different backend:
@@ -403,6 +403,21 @@ function renderEventList() {
     // Data display section
     const dataSection = isLlm ? buildLlmBlock(ev) : buildJsonBlock(ev);
 
+    // Observation level badge
+    const obsLevel   = (ev.observation_level || 'full').toLowerCase();
+    const obsLabels  = { full: 'FULL', compressed: 'COMP', metadata_only: 'META', drop: 'DROP' };
+    const obsLabel   = obsLabels[obsLevel] || obsLevel.toUpperCase();
+    const obsLevelBadge = `<span class="obs-level-badge obs-level-${obsLevel}" title="Observation level: ${obsLevel}">${obsLabel}</span>`;
+
+    // Importance score mini-bar
+    const score      = typeof ev.importance_score === 'number' ? ev.importance_score : null;
+    const importanceBar = score !== null
+      ? `<span class="importance-bar-wrap" title="Importance score: ${score.toFixed(2)}">
+           <span class="importance-bar-track"><span class="importance-bar-fill" style="width:${(score * 100).toFixed(0)}%"></span></span>
+           <span class="importance-bar-label">${score.toFixed(2)}</span>
+         </span>`
+      : '';
+
     return `
       <div class="tl-row" style="--depth:${depth}" id="tl-row-${idx}">
         ${connectors}
@@ -416,6 +431,8 @@ function renderEventList() {
             <span class="event-latency">${escHtml(formatLatency(lat))}</span>
             ${ev.timestamp ? `<span class="event-timestamp">${escHtml(new Date(ev.timestamp).toLocaleTimeString())}</span>` : ''}
             <span class="event-status-badge">${badgeHTML(ev.status)}</span>
+            ${obsLevelBadge}
+            ${importanceBar}
             <svg class="event-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polyline points="9 18 15 12 9 6"/>
             </svg>

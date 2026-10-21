@@ -51,6 +51,7 @@ from agentlens.storage import (
     init_db,
     close_database,
 )
+from agentlens.observation import build_policy_and_scorer
 
 load_dotenv()
 
@@ -203,6 +204,8 @@ class SerializedEvent(BaseModel):
     output_data: Optional[dict[str, Any]] = None
     latency_ms: Optional[float] = None
     metadata: Optional[dict[str, Any]] = None
+    importance_score: float = 0.5
+    observation_level: str = "full"
     # Derived convenience field — list of direct children event IDs.
     children: list[str] = Field(default_factory=list)
 
@@ -215,6 +218,8 @@ class RunResponse(BaseModel):
     events: list[SerializedEvent]
     total_latency_ms: float
     status: str
+    # Optional observation level summary (populated in adaptive mode).
+    observation_summary: Optional[dict[str, int]] = None
 
 
 class TraceResponse(BaseModel):
@@ -271,6 +276,8 @@ class _AgentRunner:
     ) -> None:
         self._event_store = ev_store
         self._trace_store = tr_store
+        # Build scorer + policy from env (D8: adaptive is opt-in).
+        self._scorer, self._policy = build_policy_and_scorer()
 
     async def run(self, query: str) -> Trace:
         """Execute the full pipeline and return a finalised Trace.
@@ -294,7 +301,9 @@ class _AgentRunner:
         the wrapper.  Both values are stored in the new event's metadata so the
         UI can trace the retry chain.
         """
-        collector = EventCollector(storage_backend=self._event_store)
+        collector = EventCollector(storage_backend=self._event_store,
+                                   scorer=self._scorer,
+                                   policy=self._policy)
         # --- Initialise Gemini (if key is available) -----------------------
         gemini_client: Any = None
         api_key = os.getenv("GEMINI_API_KEY")
@@ -533,6 +542,12 @@ def _build_children_map(events: list[Any]) -> dict[str, list[str]]:
 def _serialize_event(event: Any, children_map: dict[str, list[str]] | None = None) -> SerializedEvent:
     """Convert an AgentEvent to the complete wire-format dict."""
     eid = str(event.event_id)
+    # Safely extract observation fields (may be absent on legacy events).
+    importance_score = getattr(event, "importance_score", 0.5)
+    obs_level_raw = getattr(event, "observation_level", "full")
+    observation_level = (
+        obs_level_raw.value if hasattr(obs_level_raw, "value") else str(obs_level_raw)
+    )
     return SerializedEvent(
         event_id=eid,
         trace_id=str(event.trace_id),
@@ -549,6 +564,8 @@ def _serialize_event(event: Any, children_map: dict[str, list[str]] | None = Non
         output_data=event.output_data,
         latency_ms=event.latency_ms,
         metadata=event.metadata,
+        importance_score=importance_score,
+        observation_level=observation_level,
         children=children_map.get(eid, []) if children_map else [],
     )
 
@@ -624,12 +641,20 @@ async def run_agent(body: RunRequest) -> RunResponse:
         ) from exc
 
     children_map = _build_children_map(trace.events)
+    serialized = [_serialize_event(e, children_map) for e in trace.events]
+
+    # Build per-level counts (only meaningful in adaptive mode but always populated).
+    obs_summary: dict[str, int] = {}
+    for ev in serialized:
+        obs_summary[ev.observation_level] = obs_summary.get(ev.observation_level, 0) + 1
+
     return RunResponse(
         trace_id=str(trace.trace_id),
         response=_extract_answer(trace),
-        events=[_serialize_event(e, children_map) for e in trace.events],
+        events=serialized,
         total_latency_ms=trace.total_latency_ms,
         status="success",
+        observation_summary=obs_summary,
     )
 
 
