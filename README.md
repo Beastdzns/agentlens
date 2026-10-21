@@ -113,8 +113,8 @@ See [docs/architecture.md](docs/architecture.md) for detailed design.
 | 8 | Failure tracking (capture, presentation, testing) | Complete |
 | 9 | Persistent storage | Complete |
 | 10 | Adaptive observability | Complete |
-| 11 | Causal analysis and root-cause diagnosis | Planned |
-| 12 | Final web application and deployment | Planned |
+| 11 | Causal analysis and root-cause diagnosis | Complete |
+| 12 | Final web application (local demo): failed-run trace, trace history, responsive UI, seeded demo data | Complete |
 
 ## Research Questions
 
@@ -395,6 +395,7 @@ The frontend is served by `agentlens.web_api` and expects these endpoints:
 | GET    | /health   | Check server health                |
 | GET    | /         | Service information                |
 | POST   | /api/run  | Run an agent query, return a trace |
+| GET    | /api/traces | List stored traces (filters, date range, keyset pagination) |
 | GET    | /api/traces/{trace_id} | Retrieve a stored trace |
 
 **Request body:**
@@ -533,14 +534,12 @@ The trace endpoint exposes the failure summary the UI consumes:
 }
 ```
 
-### Known limitation
-
-A live run that fails returns HTTP `502`; the persisted trace is stored
-server-side but its `trace_id` is not returned in that error response, so the
-UI shows a generic error banner rather than the failed timeline. Viewing a
-failed trace directly (via `GET /api/traces/{trace_id}`) or the **Full
-Failure** mock scenario demonstrates the full failure presentation. Returning
-the trace in the `502` payload is a candidate follow-up for Phase 9.
+> **Note:** A live run that fails is no longer a bare HTTP 502 (fixed in Phase
+> 12): the API returns the failed trace — `status="failure"`, its `trace_id`,
+> its events, the error message, and the causal analysis — so the dashboard
+> can show *why* the run failed instead of a generic error banner.  Viewing a
+> failed trace directly via `GET /api/traces/{trace_id}` still works, as does
+> the **Full Failure** mock scenario.
 
 
 ---
@@ -691,4 +690,69 @@ by wall-clock" baseline on seven labelled scenarios:
 
 Full details and the evaluation write-up: [docs/phase11-causal-analysis.md](docs/phase11-causal-analysis.md).
 
+
+---
+
+## Phase 12 — Final Web Application (Local Demo Only)
+
+Phase 12 is a **local-demo-only** release: no authentication, no Docker, no
+hosting, no CI, no multi-user — just one command to run, seeded data to
+browse, and a solid dashboard.
+
+### One-command local demo
+
+```bash
+# 1. Seed the demo database (a separate ./demo.db — your real runs are untouched)
+./venv/bin/python scripts/seed_demo_data.py
+
+# 2. Start the API + dashboard against the seeded database
+AGENTLENS_STORAGE=sqlite AGENTLENS_DB_PATH=./demo.db ./venv/bin/python -m uvicorn agentlens.web_api:app --reload
+
+# 3. Open http://localhost:8000/app/
+```
+
+The dashboard loads the "Trace History" card listing the seeded runs
+(success, retry-recovered, and two failures).  Click any trace to see its
+events, causal graph, and root-cause diagnosis.  Run your own query with
+`POST /api/run` — a failing run returns the failed trace (not a 502) with the
+error message and the causal analysis attached.
+
+### What changed in Phase 12
+
+- **Backend (`feature/final-backend`)**
+  - `POST /api/run` returns the failed trace (`status="failure"`, `trace_id`,
+    events, error message) instead of a bare HTTP 502; `RunResponse` gains the
+    optional `error`, `causal_graph` and `root_cause` fields.
+  - The four duplicate step events are gone — a live run records 7 events,
+    not 11 — and the pipeline's parent chain is connected
+    (`decision → search → retrieval → memory-write → synthesis → final
+    response`), so every live trace draws a real causal graph.
+  - `capture_step` records its output like `capture_llm_call` /
+    `capture_tool_call` already did; `EventCollector.last_event` links
+    parent steps.
+- **Frontend (`feature/final-frontend`)**
+  - Trace history panel against `GET /api/traces`: status + date-range
+    filters, keyset "Load more" pagination.
+  - Responsive layout — the first `@media` breakpoints (`style.css` had
+    none): stacked sidebar/results on narrow windows, compact stats and
+    headers on phones.
+  - Live-run failure state: error message, root-cause verdict/explanation,
+    and buttons to jump to the causal analysis or the failed steps.
+- **Demo (`research/final-demo`)**
+  - `scripts/seed_demo_data.py` writes four demo traces into `./demo.db`
+    (selectable via `AGENTLENS_DB_PATH`).
+  - Demo guide above; both suites stay green (616 Python tests,
+    227 browser tests).
+
+### Still out of scope (local-demo-only)
+- Authentication, multi-user, Docker, CI/CD, hosting (explicitly dropped for
+  Phase 12).
+- LangChain / LlamaIndex normalizer adapters (`EventNormalizer.from_*`
+  remain stubs).
+- Persistent storage beyond SQLite for the local demo.
+
+---
+
+**Status:** Phase 12 — Final Demo Complete  
+**Last Updated:** 2026-10-22
 
