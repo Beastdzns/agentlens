@@ -283,27 +283,57 @@ Wrong Final Answer
 
 ### F. Failure Diagnosis
 
-*Phase 4 feature:*
+*Phase 11 feature (in progress — analyzer complete):*
 
 When an agent fails, AgentLens answers: **"What caused the failure?"**
+
+The analyzer (`agentlens.causal.analyzer.RootCauseAnalyzer`) walks the causal
+graph with **rules only** — no model is ever called, so the same trace always
+yields the same diagnosis (D1, NFR6).
+
+**Diagnosis rules**
+
+| # | Rule |
+|---|---|
+| 1 | A **failure** is a node with status `failure` (an `error`-typed node counts too) |
+| 2 | A failure with **no failed ancestor** is *primary*; one with a failed ancestor is *secondary* (a consequence) |
+| 3 | The **root cause** is the primary failure that affected the most events; ties break on depth, then timestamp, then event id |
+| 4 | A failure followed by a **successful retry** is *recovered* — reported, but not an unrecovered root cause |
+| 5 | A trace without failures yields `no_failure`; a trace whose failures were all recovered yields `recovered` — never a guess (D6) |
+| 6 | **Affected events** are the non-failed descendants of the root cause |
+| 7 | The **evidence path** is the shortest structural path from the root cause to the deepest failure |
+| 8 | When the deepest failure has no failed ancestor, the closest ancestor whose recorded output reports a problem is reported as `suspected_upstream` (verdict `insufficient_evidence`) |
+| 9 | **Confidence** is deterministic: `1.0` = chain of ≥ 2 with an exception type, `0.8` = chain of ≥ 2, `0.5` = suspected upstream, `0.3` = terminal failure without causal context, `0.0` = no failure |
+| 10 | **Category** comes from the recorded fields only: `timeout`, `invalid_input`, `tool_error`, `llm_error`, else `unknown` |
+
+**Grounded explanation.** The explanation is templated
+(`agentlens.causal.explain.explain`) and may only interpolate recorded values
+— event type, status, error message, exception type, event ids (D7). When a
+failed event's payload was not retained (adaptive observation), the
+explanation says *"no error detail was retained"* and the confidence is
+capped at `0.5` instead of inventing a cause (D5).
+
+**HTTP surface:**
+
+- `GET /api/traces/{trace_id}/root-cause` → the diagnosis
+- `GET /api/traces/{trace_id}` → additive `root_cause` field
+  (opt out with `?include_root_cause=false`)
+
+Both endpoints fail open: a diagnosis that cannot be produced is omitted and
+logged, never raised as a 5xx (D8).
 
 **Example:**
 
 ```
 ROOT CAUSE:
-  Incorrect result returned by Search Tool.
+  tool_call: search (event_type=tool_call, status=failure)
+  error message "search backend unavailable", exception type RuntimeError
 
 EVIDENCE PATH:
-  Search Tool
+  tool_call: search
       ↓
-  Incorrect Search Result
-      ↓
-  LLM Decision
-      ↓
-  Final Answer
+  final_response
 ```
-
-The diagnosis is grounded in recorded execution evidence—not an unsupported LLM explanation.
 
 ## Functional Requirements
 

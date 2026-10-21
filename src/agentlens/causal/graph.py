@@ -76,6 +76,10 @@ _STRUCTURAL_RELATIONS = frozenset(
 #: Maximum number of characters kept from a payload value in a node label.
 _LABEL_SUMMARY_CHARS = 40
 
+#: ``output_data`` keys whose presence signals that a step produced a wrong
+#: or failed result even though the step itself did not fail.
+_SUSPICIOUS_OUTPUT_KEYS = ("error", "exception", "invalid")
+
 
 @dataclass(frozen=True)
 class CausalNode:
@@ -92,6 +96,10 @@ class CausalNode:
     label: str
     error_message: Optional[str] = None
     exception_type: Optional[str] = None
+    #: True when the recorded output of the step reports a problem (the step
+    #: itself may still have succeeded) — used by the root-cause analyzer to
+    #: spot a suspicious upstream step.
+    suspicious_output: bool = False
 
     @property
     def is_failure(self) -> bool:
@@ -113,6 +121,7 @@ class CausalNode:
             "error_message": self.error_message,
             "exception_type": self.exception_type,
             "is_failure": self.is_failure,
+            "suspicious_output": self.suspicious_output,
         }
 
 
@@ -351,6 +360,19 @@ def _exception_type_of(event: Any) -> Optional[str]:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def _suspicious_output_of(event: Any) -> bool:
+    """
+    True when the recorded output of the step reports a problem.
+
+    A step can succeed and still hand a wrong result downstream — the
+    recorded output keys are the only evidence of that.
+    """
+    output = _payload_of(event, "output_data")
+    if any(key in output for key in _SUSPICIOUS_OUTPUT_KEYS):
+        return True
+    return bool(_metadata_of(event).get("exception_type"))
+
+
 def _short(value: Any) -> Optional[str]:
     if not isinstance(value, str):
         return None
@@ -405,6 +427,7 @@ def _node_for(event: Any) -> CausalNode:
         label=_label_for(event, event_type),
         error_message=_error_message_of(event),
         exception_type=_exception_type_of(event),
+        suspicious_output=_suspicious_output_of(event),
     )
 
 
