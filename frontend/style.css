@@ -40,10 +40,6 @@
 
   --gray-bg:   rgba(255,255,255,.05);
 
-  --radius-sm: 6px;
-  --radius:    10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
 
   --shadow-sm: 0 1px 2px rgba(0,0,0,.4);
   --shadow:    0 4px 16px rgba(0,0,0,.35);
@@ -55,6 +51,65 @@
   --header-h: 56px;
   --sidebar-w: 300px;
   --transition: 150ms ease;
+
+  /* Radius scale — every rounded corner uses one of these tokens so the UI
+     feels consistent from badges up to panels. */
+  --radius-xs: 4px;   /* chips, badges, tiny pills */
+  --radius-sm: 8px;   /* buttons, inputs, selects, small cards */
+  --radius-md: 12px;  /* event cards, history items */
+  --radius-lg: 16px;  /* sections, stat cards, panels */
+  --radius-xl: 20px;  /* large emphasis panels */
+  --radius-full: 999px; /* pills, dots, spinners */
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/JetBrainsMono-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/JetBrainsMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
 }
 
 /* --- Reset -------------------------------------------------- */
@@ -94,7 +149,7 @@ textarea { font-family: inherit; }
 .brand-icon {
   width: 36px; height: 36px;
   background: linear-gradient(135deg, var(--brand-500), #8b5cf6);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   display: flex; align-items: center; justify-content: center;
   color: #fff;
   flex-shrink: 0;
@@ -121,7 +176,7 @@ textarea { font-family: inherit; }
 .api-status {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 10px;
-  border-radius: 99px;
+  border-radius: var(--radius-full);
   font-size: 11px;
   font-weight: 600;
   background: var(--gray-bg);
@@ -133,7 +188,7 @@ textarea { font-family: inherit; }
 .api-status.offline { background: var(--red-bg);    border-color: var(--red-border);   color: var(--red-500); }
 .status-dot {
   width: 6px; height: 6px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: currentColor;
 }
 .api-status.online .status-dot  { animation: pulse-green 1.8s infinite; }
@@ -171,6 +226,7 @@ textarea { font-family: inherit; }
 .btn-primary {
   background: linear-gradient(135deg, var(--brand-500), #7c3aed);
   color: #fff;
+  border-radius: var(--radius-sm);
   box-shadow: 0 2px 8px rgba(99,102,241,.35);
 }
 .btn-primary:hover:not(:disabled) {
@@ -189,7 +245,7 @@ textarea { font-family: inherit; }
   justify-content: center;
   padding: 11px 20px;
   font-size: 14px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   margin-top: 10px;
 }
 
@@ -228,7 +284,7 @@ textarea { font-family: inherit; }
   width: 100%;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 13px;
   padding: 12px 14px;
@@ -266,7 +322,7 @@ textarea { font-family: inherit; }
 }
 .scenario-dot {
   width: 7px; height: 7px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   flex-shrink: 0;
 }
 .dot-success { background: var(--green-500); box-shadow: 0 0 5px var(--green-500); }
@@ -390,7 +446,7 @@ textarea { font-family: inherit; }
   color: var(--text-muted);
   font-size: 14px;
   padding: 2px 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   transition: color var(--transition);
 }
 .error-dismiss:hover { color: var(--text-primary); }
@@ -426,6 +482,7 @@ textarea { font-family: inherit; }
 .stat-value {
   font-size: 18px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
   color: var(--text-primary);
   word-break: break-all;
 }
@@ -501,7 +558,7 @@ textarea { font-family: inherit; }
 
 .event-card {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   overflow: hidden;
   transition: border-color var(--transition);
 }
@@ -535,7 +592,7 @@ textarea { font-family: inherit; }
   text-transform: uppercase;
   letter-spacing: .06em;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--gray-bg);
   color: var(--text-secondary);
 }
@@ -552,6 +609,7 @@ textarea { font-family: inherit; }
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .event-status-badge { }
@@ -561,7 +619,7 @@ textarea { font-family: inherit; }
   display: inline-flex; align-items: center;
   font-size: 10px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .06em;
-  padding: 2px 8px; border-radius: 4px;
+  padding: 2px 8px; border-radius: var(--radius-xs);
 }
 .badge-success { background: var(--green-bg);  color: var(--green-500);  border: 1px solid var(--green-border); }
 .badge-failure,
@@ -656,7 +714,7 @@ textarea { font-family: inherit; }
 .tl-connector {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--border-accent);
   flex-shrink: 0;
   margin-right: 4px;
@@ -759,7 +817,7 @@ textarea { font-family: inherit; }
   text-transform: uppercase;
   letter-spacing: .1em;
   padding: 2px 7px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   margin-bottom: 8px;
 }
 .llm-label-prompt {
@@ -854,7 +912,7 @@ textarea { font-family: inherit; }
   font-weight: 700;
   letter-spacing: .07em;
   padding: 3px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: rgba(239,68,68,.18);
   color: var(--red-500);
   border: 1px solid rgba(239,68,68,.25);
@@ -889,7 +947,7 @@ textarea { font-family: inherit; }
   color: var(--text-muted);
   background: rgba(255,255,255,.04);
   padding: 0 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
 }
 .fs-id {
   flex-shrink: 0;
@@ -909,7 +967,7 @@ textarea { font-family: inherit; }
   font-size: 10px;
   font-weight: 700;
   padding: 1px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   background: rgba(239,68,68,.12);
   color: var(--red-500);
   border: 1px solid rgba(239,68,68,.20);
@@ -921,7 +979,7 @@ textarea { font-family: inherit; }
   color: var(--text-muted);
   background: rgba(255,255,255,.04);
   padding: 0 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
 }
 
 /* ── Retry linkage badges ───────────────────────────────────── */
@@ -932,7 +990,7 @@ textarea { font-family: inherit; }
   font-size: 10px;
   font-weight: 600;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   letter-spacing: .03em;
 }
 .retry-badge code {
@@ -1208,7 +1266,7 @@ textarea { font-family: inherit; }
 }
 .cg-legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .cg-legend-dot {
-  width: 8px; height: 8px; border-radius: 50%;
+  width: 8px; height: 8px; border-radius: var(--radius-full);
   background: var(--red-500);
 }
 .cg-legend-failure { background: var(--red-500); }
@@ -1308,7 +1366,7 @@ textarea { font-family: inherit; }
 }
 .history-dot {
   width: 6px; height: 6px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--text-muted);
   flex-shrink: 0;
 }
@@ -1369,7 +1427,7 @@ textarea { font-family: inherit; }
 .run-failure {
   background: var(--red-bg);
   border: 1px solid var(--red-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   padding: 14px 18px;
   margin-bottom: 20px;
   animation: fade-up 200ms ease;
@@ -1388,7 +1446,7 @@ textarea { font-family: inherit; }
   text-transform: uppercase;
   letter-spacing: .06em;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: rgba(239,68,68,.14);
   border: 1px solid var(--red-border);
   color: var(--red-500);
