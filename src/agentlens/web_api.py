@@ -26,6 +26,7 @@ Start the server::
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from pathlib import Path
@@ -52,8 +53,11 @@ from agentlens.storage import (
     close_database,
 )
 from agentlens.observation import build_policy_and_scorer
+from agentlens.causal import build_graph
 
 load_dotenv()
+
+logger = logging.getLogger("agentlens.web_api")
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +241,46 @@ class TraceResponse(BaseModel):
     pending_count: int = 0
     failure_event_ids: list[str] = Field(default_factory=list)
     events: list[SerializedEvent]
+    # Optional causal graph (Phase 11).  Additive: ``None`` when the trace has
+    # no events or when graph construction failed (fail-open, D8).
+    causal_graph: Optional["CausalGraphResponse"] = None
 
+
+class CausalNodeModel(BaseModel):
+    """One event rendered as a node of the causal graph."""
+
+    event_id: str
+    parent_id: Optional[str] = None
+    event_type: str
+    status: str
+    timestamp: str
+    latency_ms: Optional[float] = None
+    importance_score: float = 0.5
+    observation_level: str = "full"
+    label: str
+    error_message: Optional[str] = None
+    exception_type: Optional[str] = None
+    is_failure: bool = False
+
+
+class CausalEdgeModel(BaseModel):
+    """A directed relation between two causal nodes."""
+
+    source: str
+    target: str
+    relation: str
+
+
+class CausalGraphResponse(BaseModel):
+    """Body returned by ``GET /api/traces/{trace_id}/causal-graph``."""
+
+    trace_id: str
+    nodes: list[CausalNodeModel] = Field(default_factory=list)
+    edges: list[CausalEdgeModel] = Field(default_factory=list)
+
+
+# Resolve the ``causal_graph`` forward reference declared on ``TraceResponse``.
+TraceResponse.model_rebuild()
 
 
 class TraceSummary(BaseModel):
@@ -602,6 +645,29 @@ def _compute_trace_summary(events: list[Any]) -> dict[str, Any]:
     }
 
 
+def _build_causal_graph_response(
+    trace_id: str, events: list[Any]
+) -> Optional[CausalGraphResponse]:
+    """
+    Build the causal-graph payload for a trace.
+
+    Fail-open (D8): a graph that cannot be built must never turn a trace
+    request into a 5xx.  On error the graph is simply omitted (``None``)
+    and the failure is logged.
+    """
+    try:
+        graph = build_graph(events)
+    except Exception as exc:  # noqa: BLE001 - fail-open by design
+        logger.warning("Causal graph construction failed for trace %s: %s", trace_id, exc)
+        return None
+
+    return CausalGraphResponse(
+        trace_id=str(trace_id),
+        nodes=[CausalNodeModel(**node.to_dict()) for node in graph.nodes.values()],
+        edges=[CausalEdgeModel(**edge.to_dict()) for edge in graph.edges],
+    )
+
+
 def _extract_answer(trace: Trace) -> str:
     """Pull the final answer text from the trace events."""
     for event in reversed(trace.events):
@@ -783,6 +849,7 @@ async def get_trace(
     trace_id: str,
     status: Optional[str] = Query(default=None, description="Filter events by status (all | success | failure | partial | pending)."),
     event_type: Optional[str] = Query(default=None, description="Filter events by event type (e.g. tool_call, llm_call)."),
+    include_causal_graph: bool = Query(default=True, description="Include the Phase 11 causal graph in the response."),
 ) -> TraceResponse:
     """Retrieve a previously stored trace by its UUID, with optional filtering."""
     # --- Validate trace_id -------------------------------------------------
@@ -849,6 +916,12 @@ async def get_trace(
         trace.status.value if hasattr(trace.status, "value") else str(trace.status)
     )
 
+    causal_graph = (
+        _build_causal_graph_response(str(trace.trace_id), all_events)
+        if include_causal_graph
+        else None
+    )
+
     return TraceResponse(
         trace_id=str(trace.trace_id),
         agent_id=trace.agent_id,
@@ -861,4 +934,41 @@ async def get_trace(
         pending_count=summary["pending_count"],
         failure_event_ids=summary["failure_event_ids"],
         events=[_serialize_event(e, children_map) for e in filtered_events],
+        causal_graph=causal_graph,
     )
+
+
+@app.get(
+    "/api/traces/{trace_id}/causal-graph",
+    response_model=CausalGraphResponse,
+    tags=["traces"],
+)
+async def get_causal_graph(trace_id: str) -> CausalGraphResponse:
+    """
+    Return the causal graph of a stored trace.
+
+    The graph is built from **all** events of the trace — filters do not
+    change the causal structure.  An empty trace yields an empty graph
+    rather than an error, and a graph that cannot be built degrades to an
+    empty graph (fail-open, D8).
+    """
+    try:
+        tid = UUID(trace_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid trace_id format: {trace_id}",
+        ) from exc
+
+    try:
+        trace = await trace_store.get_trace(tid)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Trace {trace_id} not found",
+        ) from exc
+
+    graph = _build_causal_graph_response(str(trace.trace_id), trace.events)
+    if graph is None:
+        return CausalGraphResponse(trace_id=str(trace.trace_id))
+    return graph
