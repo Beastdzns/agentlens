@@ -240,6 +240,22 @@ def test_missing_error_message_is_none_not_invented() -> None:
     assert node.exception_type is None
 
 
+def test_successful_step_with_a_problem_in_its_output_is_flagged() -> None:
+    """A step can succeed and still hand a wrong result downstream."""
+    event = _event(status=EventStatus.SUCCESS, output_data={"error": "no documents"})
+    node = build_graph([event]).node(str(event.event_id))
+    assert node is not None
+    assert node.suspicious_output is True
+    assert node.is_failure is False
+
+
+def test_clean_output_is_not_flagged_as_suspicious() -> None:
+    event = _event(status=EventStatus.SUCCESS, output_data={"result": "fine"})
+    node = build_graph([event]).node(str(event.event_id))
+    assert node is not None
+    assert node.suspicious_output is False
+
+
 def test_label_uses_recorded_tool_name() -> None:
     event = _event(event_type=EventType.TOOL_CALL, output_data={"tool": "search"})
     node = build_graph([event]).node(str(event.event_id))
@@ -437,5 +453,6 @@ def test_node_and_edge_dicts_have_expected_keys() -> None:
         "error_message",
         "exception_type",
         "is_failure",
+        "suspicious_output",
     }
     assert edge.to_dict() == {"source": "a", "target": "b", "relation": "parent_of"}

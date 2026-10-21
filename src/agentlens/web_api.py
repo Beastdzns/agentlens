@@ -53,7 +53,7 @@ from agentlens.storage import (
     close_database,
 )
 from agentlens.observation import build_policy_and_scorer
-from agentlens.causal import build_graph
+from agentlens.causal import build_graph, RootCauseAnalyzer
 
 load_dotenv()
 
@@ -244,6 +244,8 @@ class TraceResponse(BaseModel):
     # Optional causal graph (Phase 11).  Additive: ``None`` when the trace has
     # no events or when graph construction failed (fail-open, D8).
     causal_graph: Optional["CausalGraphResponse"] = None
+    # Optional root-cause diagnosis (Phase 11).  Additive, same rules.
+    root_cause: Optional["RootCauseResponse"] = None
 
 
 class CausalNodeModel(BaseModel):
@@ -261,6 +263,7 @@ class CausalNodeModel(BaseModel):
     error_message: Optional[str] = None
     exception_type: Optional[str] = None
     is_failure: bool = False
+    suspicious_output: bool = False
 
 
 class CausalEdgeModel(BaseModel):
@@ -277,6 +280,22 @@ class CausalGraphResponse(BaseModel):
     trace_id: str
     nodes: list[CausalNodeModel] = Field(default_factory=list)
     edges: list[CausalEdgeModel] = Field(default_factory=list)
+
+
+class RootCauseResponse(BaseModel):
+    """Body returned by ``GET /api/traces/{trace_id}/root-cause``."""
+
+    trace_id: str
+    verdict: str = "no_failure"
+    root_cause_event_id: Optional[str] = None
+    confidence: float = 0.0
+    category: str = "none"
+    explanation: str = ""
+    evidence_path: list[str] = Field(default_factory=list)
+    primary_failures: list[str] = Field(default_factory=list)
+    secondary_failures: list[str] = Field(default_factory=list)
+    affected_events: list[str] = Field(default_factory=list)
+    recovered_failures: list[str] = Field(default_factory=list)
 
 
 # Resolve the ``causal_graph`` forward reference declared on ``TraceResponse``.
@@ -668,6 +687,26 @@ def _build_causal_graph_response(
     )
 
 
+def _analyze_root_cause(
+    trace_id: str, events: list[Any]
+) -> Optional[RootCauseResponse]:
+    """
+    Diagnose the root cause of a trace.
+
+    Fail-open (D8): a diagnosis that cannot be produced must never turn a
+    trace request into a 5xx.  On error the payload is omitted (``None``)
+    and the failure is logged.
+    """
+    try:
+        graph = build_graph(events)
+        diagnosis = RootCauseAnalyzer().analyze(graph)
+    except Exception as exc:  # noqa: BLE001 - fail-open by design
+        logger.warning("Root-cause analysis failed for trace %s: %s", trace_id, exc)
+        return None
+
+    return RootCauseResponse(trace_id=str(trace_id), **diagnosis.to_dict())
+
+
 def _extract_answer(trace: Trace) -> str:
     """Pull the final answer text from the trace events."""
     for event in reversed(trace.events):
@@ -850,6 +889,7 @@ async def get_trace(
     status: Optional[str] = Query(default=None, description="Filter events by status (all | success | failure | partial | pending)."),
     event_type: Optional[str] = Query(default=None, description="Filter events by event type (e.g. tool_call, llm_call)."),
     include_causal_graph: bool = Query(default=True, description="Include the Phase 11 causal graph in the response."),
+    include_root_cause: bool = Query(default=True, description="Include the Phase 11 root-cause diagnosis in the response."),
 ) -> TraceResponse:
     """Retrieve a previously stored trace by its UUID, with optional filtering."""
     # --- Validate trace_id -------------------------------------------------
@@ -921,6 +961,11 @@ async def get_trace(
         if include_causal_graph
         else None
     )
+    root_cause = (
+        _analyze_root_cause(str(trace.trace_id), all_events)
+        if include_root_cause
+        else None
+    )
 
     return TraceResponse(
         trace_id=str(trace.trace_id),
@@ -935,6 +980,7 @@ async def get_trace(
         failure_event_ids=summary["failure_event_ids"],
         events=[_serialize_event(e, children_map) for e in filtered_events],
         causal_graph=causal_graph,
+        root_cause=root_cause,
     )
 
 
@@ -972,3 +1018,38 @@ async def get_causal_graph(trace_id: str) -> CausalGraphResponse:
     if graph is None:
         return CausalGraphResponse(trace_id=str(trace.trace_id))
     return graph
+
+
+@app.get(
+    "/api/traces/{trace_id}/root-cause",
+    response_model=RootCauseResponse,
+    tags=["traces"],
+)
+async def get_root_cause(trace_id: str) -> RootCauseResponse:
+    """
+    Diagnose what caused the failure of a stored trace.
+
+    The diagnosis is rule-based and grounded in recorded evidence: it never
+    calls a model and never invents a cause.  A trace without failures yields
+    ``verdict="no_failure"`` rather than a guess.
+    """
+    try:
+        tid = UUID(trace_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid trace_id format: {trace_id}",
+        ) from exc
+
+    try:
+        trace = await trace_store.get_trace(tid)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Trace {trace_id} not found",
+        ) from exc
+
+    diagnosis = _analyze_root_cause(str(trace.trace_id), trace.events)
+    if diagnosis is None:
+        return RootCauseResponse(trace_id=str(trace.trace_id))
+    return diagnosis

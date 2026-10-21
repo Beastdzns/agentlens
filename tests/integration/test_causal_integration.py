@@ -347,3 +347,151 @@ class TestCausalGraphRobustness:
             schema = client.get("/openapi.json").json()
 
         assert "/api/traces/{trace_id}/causal-graph" in schema["paths"]
+
+
+# ===========================================================================
+# Root-cause diagnosis
+# ===========================================================================
+
+
+def _failing_trace() -> Trace:
+    """A trace whose tool call failed and took the final answer with it."""
+    trace = Trace(agent_id="causal-agent")
+    tool = _event(
+        trace.trace_id,
+        event_type=EventType.TOOL_CALL,
+        status=EventStatus.FAILURE,
+        output_data={"error": "search backend unavailable"},
+        metadata={"exception_type": "RuntimeError"},
+    )
+    final = _event(
+        trace.trace_id,
+        event_type=EventType.FINAL_RESPONSE,
+        status=EventStatus.FAILURE,
+        parent_id=tool.event_id,
+        output_data={"error": "no answer"},
+    )
+    for event in (tool, final):
+        trace.add_event(event)
+    trace.finalize(EventStatus.FAILURE)
+    return trace
+
+
+class TestRootCauseEndpoint:
+    """The diagnosis endpoint must answer "what caused the failure?"."""
+
+    @pytest.mark.asyncio
+    async def test_root_cause_endpoint_reports_the_failing_step(self):
+        trace = _failing_trace()
+        trace_id = await _store_trace(trace)
+
+        with TestClient(app) as client:
+            resp = client.get(f"/api/traces/{trace_id}/root-cause")
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+
+        assert data["trace_id"] == trace_id
+        assert data["verdict"] == "root_cause"
+        assert data["root_cause_event_id"] == str(trace.events[0].event_id)
+        assert data["confidence"] > 0.5
+        assert data["evidence_path"][0] == str(trace.events[0].event_id)
+
+    @pytest.mark.asyncio
+    async def test_explanation_cites_the_recorded_error(self):
+        trace = _failing_trace()
+        trace_id = await _store_trace(trace)
+
+        with TestClient(app) as client:
+            data = client.get(f"/api/traces/{trace_id}/root-cause").json()
+
+        assert "search backend unavailable" in data["explanation"]
+
+    @pytest.mark.asyncio
+    async def test_trace_without_failures_reports_no_failure(self):
+        trace = Trace(agent_id="causal-agent")
+        trace.add_event(_event(trace.trace_id, event_type=EventType.LLM_CALL))
+        trace_id = await _store_trace(trace)
+
+        with TestClient(app) as client:
+            data = client.get(f"/api/traces/{trace_id}/root-cause").json()
+
+        assert data["verdict"] == "no_failure"
+        assert data["root_cause_event_id"] is None
+        assert data["confidence"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_unknown_trace_returns_404(self):
+        with TestClient(app) as client:
+            resp = client.get(f"/api/traces/{uuid4()}/root-cause")
+        assert resp.status_code == 404
+
+    def test_malformed_trace_id_returns_400(self):
+        with TestClient(app) as client:
+            resp = client.get("/api/traces/not-a-uuid/root-cause")
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_diagnosis_is_embedded_in_the_trace_response(self):
+        trace = _failing_trace()
+        trace_id = await _store_trace(trace)
+
+        with TestClient(app) as client:
+            embedded = client.get(f"/api/traces/{trace_id}").json()["root_cause"]
+            dedicated = client.get(f"/api/traces/{trace_id}/root-cause").json()
+
+        assert embedded == dedicated
+
+    @pytest.mark.asyncio
+    async def test_diagnosis_can_be_excluded(self):
+        trace = _failing_trace()
+        trace_id = await _store_trace(trace)
+
+        with TestClient(app) as client:
+            data = client.get(
+                f"/api/traces/{trace_id}", params={"include_root_cause": "false"}
+            ).json()
+
+        assert data["root_cause"] is None
+        assert data["events"]
+
+    @pytest.mark.asyncio
+    async def test_adaptive_trace_with_dropped_payload_still_diagnoses(self):
+        """D5: the diagnosis degrades, it never breaks and never invents."""
+        trace = Trace(agent_id="causal-agent")
+        failed = _event(
+            trace.trace_id,
+            event_type=EventType.TOOL_CALL,
+            status=EventStatus.FAILURE,
+            observation_level=ObservationLevel.DROP,
+            output_data=None,
+        )
+        trace.add_event(failed)
+        trace_id = await _store_trace(trace)
+
+        with TestClient(app) as client:
+            resp = client.get(f"/api/traces/{trace_id}/root-cause")
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+
+        assert data["verdict"] == "root_cause"
+        assert data["root_cause_event_id"] == str(failed.event_id)
+        assert data["confidence"] <= 0.5
+        assert "no error detail was retained" in data["explanation"].lower()
+
+    @pytest.mark.asyncio
+    async def test_diagnosis_is_deterministic_across_requests(self):
+        trace = _failing_trace()
+        trace_id = await _store_trace(trace)
+
+        with TestClient(app) as client:
+            first = client.get(f"/api/traces/{trace_id}/root-cause").json()
+            second = client.get(f"/api/traces/{trace_id}/root-cause").json()
+
+        assert first == second
+
+    @pytest.mark.asyncio
+    async def test_root_cause_endpoint_is_listed_in_the_openapi_schema(self):
+        with TestClient(app) as client:
+            schema = client.get("/openapi.json").json()
+
+        assert "/api/traces/{trace_id}/root-cause" in schema["paths"]
